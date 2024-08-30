@@ -19,3 +19,25 @@ index c83a06b..7e286f7 100644
      } else {
          fprintf(stderr, "Could not open conf/username.txt for reading\n");
      }
+diff --git a/test/assignment1/username-from-conf-file.h b/test/assignment1/username-from-conf-file.h
+index c83a06b..5b336ad 100644
+--- a/test/assignment1/username-from-conf-file.h
++++ b/test/assignment1/username-from-conf-file.h
+@@ -10,8 +10,7 @@ static inline char *malloc_username_from_conf_file()
+ {
+     size_t len = 0;
+     // Note: this buffer will be reallocated in getline() as necessary
+-    char *buffer = malloc(len + 1);
+-    buffer[0] = '\0';
++    char *buffer = NULL;
+ 
+     FILE *fp = fopen("conf/username.txt","r");
+     if ( fp != NULL ) {
+@@ -38,6 +37,7 @@ static inline char *malloc_username_from_conf_file()
+         } else {
+             printf("Read %s from conf/username.txt\n", buffer);
+         }
++        fclose(fp);
+     } else {
+         fprintf(stderr, "Could not open conf/username.txt for reading\n");
+     }

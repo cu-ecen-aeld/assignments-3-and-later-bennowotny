@@ -9,16 +9,18 @@ void print_usage(char* invocation_name);
 
 int main(int argc, char** argv){
 
+  openlog("writer", 0, LOG_USER);
+
   if(argc < 3){
+    syslog(LOG_ERR, "Missing parameters");
     (void)printf("Missing parameters\n");
     print_usage(argv[0]);
+    closelog();
     return EXIT_FAILURE;
   }
 
   const char* writefile = argv[1];
   const char* writestr = argv[2];
-
-  openlog("writer", 0, LOG_USER);
 
   // Making the directory is ignored for the C version of writer
   FILE *output_file = fopen(writefile, "w");

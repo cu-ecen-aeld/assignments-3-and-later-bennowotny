@@ -2,6 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <sys/syslog.h>
+#include <syslog.h>
+
 void print_usage(char* invocation_name);
 
 int main(int argc, char** argv){
@@ -15,19 +18,27 @@ int main(int argc, char** argv){
   const char* writefile = argv[1];
   const char* writestr = argv[2];
 
-  // Making the directory is ignored for the C version
+  openlog("writer", 0, LOG_USER);
+
+  // Making the directory is ignored for the C version of writer
   FILE *output_file = fopen(writefile, "w");
   if(output_file == NULL){
+    syslog(LOG_ERR, "Could not create/open file '%s'", writefile);
     (void)printf("Could not create/open file '%s'\n", writefile);
+    closelog();
     return EXIT_FAILURE;
   }
 
+  syslog(LOG_DEBUG, "Writing %s to %s", writestr, writefile);
   const long write_return_value = fwrite(writestr, sizeof(*writestr), strlen(writestr), output_file);
   if(write_return_value != strlen(writestr)){
+    syslog(LOG_ERR, "Could not write all data to file");
     (void)printf("Could not write all data to file\n");
+    closelog();
     return EXIT_FAILURE;
   }
 
+  closelog();
   return EXIT_SUCCESS;
 }
 

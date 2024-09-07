@@ -36,10 +36,12 @@ int main(int argc, char** argv){
   if(write_return_value != strlen(writestr)){
     syslog(LOG_ERR, "Could not write all data to file");
     (void)printf("Could not write all data to file\n");
+    fclose(output_file);
     closelog();
     return EXIT_FAILURE;
   }
 
+  fclose(output_file);
   closelog();
   return EXIT_SUCCESS;
 }

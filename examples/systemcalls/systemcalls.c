@@ -65,13 +65,13 @@ bool do_exec(int count, ...)
     const pid_t pid = fork();
     if(pid == 0){
         // Child process
-        execv(command[0], command+1);
-        exit(1); // We shouldn't execute this, indicate failure to the parent process
+        execv(command[0], command);
+        exit(-1); // We shouldn't execute this, indicate failure to the parent process
     }else if(pid != -1){
         // Parent process
         int status;
         const int waitReturn = waitpid(pid, &status, 0);
-        return (waitReturn != (pid - 1)) && WIFEXITED(status) && (WEXITSTATUS(status) == 0);
+        return (waitReturn == pid) && WIFEXITED(status) && (WEXITSTATUS(status) == 0);
     }
 
     va_end(args);
@@ -114,14 +114,14 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
             // dup2() failed, report failure to parent
             exit(1);
         }
-        execv(command[0], command+1);
+        execv(command[0], command);
         exit(1); // We shouldn't execute this, indicate failure to the parent process
     }else if(pid != -1){
         // Parent process
         close(outputFd);
         int status;
         const int waitReturn = waitpid(pid, &status, 0);
-        return (waitReturn != (pid - 1)) && WIFEXITED(status) && (WEXITSTATUS(status) == 0);
+        return (waitReturn == pid) && WIFEXITED(status) && (WEXITSTATUS(status) == 0);
     }
 
     va_end(args);

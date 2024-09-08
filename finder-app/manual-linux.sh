@@ -40,9 +40,15 @@ if [ ! -e "${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image" ]; then
     git checkout "${KERNEL_VERSION}"
 
     # TODO: Add your kernel build steps here
+    make "ARCH=${ARCH}" "CROSS_COMPILE=${CROSS_COMPILE}" mrproper
+    make "ARCH=${ARCH}" "CROSS_COMPILE=${CROSS_COMPILE}" defconfig
+    make -j "ARCH=${ARCH}" "CROSS_COMPILE=${CROSS_COMPILE}" all
+    # make -j "ARCH=${ARCH}" "CROSS_COMPILE=${CROSS_COMPILE}" modules
+    make -j "ARCH=${ARCH}" "CROSS_COMPILE=${CROSS_COMPILE}" dtbs
 fi
 
 echo "Adding the Image in outdir"
+cp -r "${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image" "${OUTDIR}/Image"
 
 echo "Creating the staging directory for the root filesystem"
 cd "$OUTDIR"
@@ -53,6 +59,9 @@ then
 fi
 
 # TODO: Create necessary base directories
+mkdir -p "${OUTDIR}/rootfs/bin" "${OUTDIR}/rootfs/dev" "${OUTDIR}/rootfs/etc" "${OUTDIR}/rootfs/home" "${OUTDIR}/rootfs/lib" "${OUTDIR}/rootfs/lib64" "${OUTDIR}/rootfs/proc" "${OUTDIR}/rootfs/sbin" "${OUTDIR}/rootfs/sys" "${OUTDIR}/rootfs/tmp" "${OUTDIR}/rootfs/usr" "${OUTDIR}/rootfs/var"
+mkdir -p "${OUTDIR}/rootfs/usr/bin" "${OUTDIR}/rootfs/usr/lib" "${OUTDIR}/rootfs/usr/sbin"
+mkdir -p "${OUTDIR}/rootfs/var/log"
 
 cd "$OUTDIR"
 if [ ! -d "${OUTDIR}/busybox" ]

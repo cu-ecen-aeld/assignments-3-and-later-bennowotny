@@ -21,7 +21,12 @@ else
 	echo "Using passed directory ${OUTDIR} for output"
 fi
 
-mkdir -p ${OUTDIR}
+mkdir -p "${OUTDIR}"
+if [[ ! -d "${OUTDIR}" ]]
+then
+    echo "Failed to make directory '${OUTDIR}'"
+    exit 1
+fi
 
 cd "$OUTDIR"
 if [ ! -d "${OUTDIR}/linux-stable" ]; then
@@ -29,7 +34,7 @@ if [ ! -d "${OUTDIR}/linux-stable" ]; then
 	echo "CLONING GIT LINUX STABLE VERSION ${KERNEL_VERSION} IN ${OUTDIR}"
 	git clone ${KERNEL_REPO} --depth 1 --single-branch --branch ${KERNEL_VERSION}
 fi
-if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
+if [ ! -e "${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image" ]; then
     cd linux-stable
     echo "Checking out version ${KERNEL_VERSION}"
     git checkout ${KERNEL_VERSION}
@@ -44,7 +49,7 @@ cd "$OUTDIR"
 if [ -d "${OUTDIR}/rootfs" ]
 then
 	echo "Deleting rootfs directory at ${OUTDIR}/rootfs and starting over"
-    sudo rm  -rf ${OUTDIR}/rootfs
+    sudo rm  -rf "${OUTDIR}/rootfs"
 fi
 
 # TODO: Create necessary base directories

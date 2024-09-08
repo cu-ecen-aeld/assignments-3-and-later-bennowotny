@@ -9,7 +9,7 @@ OUTDIR=/tmp/aeld
 KERNEL_REPO=git://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git
 KERNEL_VERSION=v5.15.163
 BUSYBOX_VERSION=1_33_1
-FINDER_APP_DIR=$(realpath $(dirname $0))
+FINDER_APP_DIR=$(realpath "$(dirname "$0")")
 ARCH=arm64
 CROSS_COMPILE=aarch64-none-linux-gnu-
 
@@ -32,12 +32,12 @@ cd "$OUTDIR"
 if [ ! -d "${OUTDIR}/linux-stable" ]; then
     #Clone only if the repository does not exist.
 	echo "CLONING GIT LINUX STABLE VERSION ${KERNEL_VERSION} IN ${OUTDIR}"
-	git clone ${KERNEL_REPO} --depth 1 --single-branch --branch ${KERNEL_VERSION}
+	git clone "${KERNEL_REPO}" --depth 1 --single-branch --branch "${KERNEL_VERSION}"
 fi
 if [ ! -e "${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image" ]; then
     cd linux-stable
     echo "Checking out version ${KERNEL_VERSION}"
-    git checkout ${KERNEL_VERSION}
+    git checkout "${KERNEL_VERSION}"
 
     # TODO: Add your kernel build steps here
 fi
@@ -59,7 +59,7 @@ if [ ! -d "${OUTDIR}/busybox" ]
 then
 git clone git://busybox.net/busybox.git
     cd busybox
-    git checkout ${BUSYBOX_VERSION}
+    git checkout "${BUSYBOX_VERSION}"
     # TODO:  Configure busybox
 else
     cd busybox
@@ -68,8 +68,8 @@ fi
 # TODO: Make and install busybox
 
 echo "Library dependencies"
-${CROSS_COMPILE}readelf -a bin/busybox | grep "program interpreter"
-${CROSS_COMPILE}readelf -a bin/busybox | grep "Shared library"
+"${CROSS_COMPILE}readelf" -a bin/busybox | grep "program interpreter"
+"${CROSS_COMPILE}readelf" -a bin/busybox | grep "Shared library"
 
 # TODO: Add library dependencies to rootfs
 

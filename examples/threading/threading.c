@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdint.h>
 
 // Optional: use these functions to add debug or error prints to your application
 #define DEBUG_LOG(msg,...)
@@ -15,11 +16,8 @@
 #define NS_PER_MS   (1000000)
 
 struct timespec ms_to_timespec(uint32_t ms){
-    uint32_t sec = 0;
-    while(ms >= MS_PER_SEC){
-        ++sec;
-        ms -= 1000;
-    }
+    const uint32_t sec = ms / MS_PER_SEC;
+    ms %= MS_PER_SEC;
     return (struct timespec) {.tv_sec = sec, .tv_nsec = ms * NS_PER_MS};
 }
 

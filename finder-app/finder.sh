@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
 
 usage(){
     echo "Usage: ${0} <filesdir> <searchstr>"
@@ -7,14 +7,14 @@ usage(){
     echo "  searchstr: string to search for"
 }
 
-if [[ $# -lt 2 ]]
+if [ $# -lt 2 ]
 then
     echo "Missing parameters"
     usage
     exit 1
 fi
 
-if [[ ! -d $1 ]]
+if [ ! -d "$1" ]
 then
     echo "'${1}' is not a directory"
     usage

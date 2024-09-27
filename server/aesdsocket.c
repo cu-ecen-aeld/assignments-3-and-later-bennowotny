@@ -1,8 +1,8 @@
 #include <arpa/inet.h>
 #include <asm-generic/socket.h>
-#include <signal.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,10 +19,13 @@ const int LISTEN_BACKLOG = 0;
 const char *TMP_FILE = "/var/tmp/aesdsocket";
 const size_t BUFFER_SIZE_INCREMENT = 1024;
 
-void cleanup_fd(const int *fd) { close(*fd); }
+void cleanup_fd(const int *fd) {
+  if (*fd != -1)
+    close(*fd);
+}
 
 void cleanup_socket(const int *socketFd) {
-  if(*socketFd != -1){
+  if (*socketFd != -1) {
     shutdown(*socketFd, SHUT_RDWR);
     cleanup_fd(socketFd);
   }
@@ -41,17 +44,18 @@ void cleanup_databuffer(char **ptr) { free(*ptr); }
 
 static sig_atomic_t signalCaught = 0;
 
-void signal_handler(int /* signal */){
+void signal_handler(int signal) {
+  (void)signal; // Assumed that proper signals are registered
   signalCaught = 1;
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
 
   openlog("aesdsocket", 0, LOG_USER);
   atexit(closelog); // Handle open logs at program exit
 
   bool isDaemon = false;
-  if(argc > 1 && strcmp(argv[1], "-d") == 0){
+  if (argc > 1 && strcmp(argv[1], "-d") == 0) {
     isDaemon = true;
   }
 
@@ -61,12 +65,14 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
-  setsockopt(socketFd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int));
+  if(setsockopt(socketFd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) != 0){
+    syslog(LOG_WARNING, "Could not configure address reuse, may cause spurious failures");
+  }
 
   {
     struct addrinfo hints;
-    struct addrinfo *addrResult CLEANUP(
-        cleanup_addrinfo); // Scoped in to destroy when finished using this
+    // Scoped in to destroy when finished using this
+    struct addrinfo *addrResult CLEANUP(cleanup_addrinfo);
 
     bzero(&hints, sizeof(hints));
     hints.ai_family = AF_INET;
@@ -85,8 +91,8 @@ int main(int argc, char** argv) {
     }
   }
 
-  if(isDaemon){
-    if(daemon(0, 0) == -1){
+  if (isDaemon) {
+    if (daemon(0, 0) == -1) {
       syslog(LOG_ERR, "Needed to daemonize, but couldn't");
       return EXIT_FAILURE;
     }
@@ -96,7 +102,7 @@ int main(int argc, char** argv) {
     syslog(LOG_ERR, "Could not listen for connections");
     return EXIT_FAILURE;
   }
-  
+
   FILE *tmpfile CLEANUP(cleanup_tmpfile) = fopen(TMP_FILE, "w+");
   if (tmpfile == NULL) {
     syslog(LOG_ERR, "Error when waiting for a connection");
@@ -109,8 +115,7 @@ int main(int argc, char** argv) {
   sigaction(SIGTERM, &signalBehavior, NULL);
   sigaction(SIGINT, &signalBehavior, NULL);
 
-  while(signalCaught != 1)
-  {
+  while (signalCaught != 1) {
     struct sockaddr connectedAddr;
     socklen_t addrLen = sizeof(connectedAddr);
     const int connectionSocketFd CLEANUP(cleanup_socket) =
@@ -118,14 +123,14 @@ int main(int argc, char** argv) {
     if (connectionSocketFd == -1 && signalCaught == 0) {
       syslog(LOG_ERR, "Error when waiting for a connection");
       return EXIT_FAILURE;
-    }else if(signalCaught == 1){
+    } else if (signalCaught == 1) {
       break;
     }
 
     char addrString[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &(((struct sockaddr_in *)&connectedAddr)->sin_addr),
               addrString, sizeof(connectedAddr));
-    syslog(LOG_INFO, "Connection from address: %s", addrString);
+    syslog(LOG_INFO, "Accepted connection from %s", addrString);
 
     char *dataBuf CLEANUP(cleanup_databuffer) = malloc(BUFFER_SIZE_INCREMENT);
     if (dataBuf == NULL) {
@@ -156,7 +161,8 @@ int main(int argc, char** argv) {
           return EXIT_FAILURE;
         }
         dataBufferAllocationSize += BUFFER_SIZE_INCREMENT;
-        bzero(dataBuf + dataBufferSize, dataBufferAllocationSize - dataBufferSize);
+        bzero(dataBuf + dataBufferSize,
+              dataBufferAllocationSize - dataBufferSize);
       } else {
         // We found the packet end!  Progress to the next step
         dataBufferSize = endOfPacket - dataBuf + 1; // Incl. newline
@@ -180,15 +186,20 @@ int main(int argc, char** argv) {
     }
     size_t bytesRead = 0;
     fseek(tmpfile, 0, SEEK_SET);
-    while((bytesRead = fread(fileBuf, sizeof(char), BUFFER_SIZE_INCREMENT, tmpfile)) != 0){
+    while ((bytesRead = fread(fileBuf, sizeof(char), BUFFER_SIZE_INCREMENT,
+                              tmpfile)) != 0) {
       // More data to read
-      if(send(connectionSocketFd, fileBuf, bytesRead, 0) != bytesRead){
+      if (send(connectionSocketFd, fileBuf, bytesRead, 0) != bytesRead) {
         syslog(LOG_ERR, "Could not send data to client");
         return EXIT_FAILURE;
       }
     }
 
-    syslog(LOG_INFO, "Connection closed for address: %s", addrString);
+    syslog(LOG_INFO, "Closed connection from %s", addrString);
+  }
+
+  if(signalCaught){
+    syslog(LOG_INFO, "Caught signal, exiting");
   }
 
   // Variables that are stack-allocated will have a 'destructor' called

@@ -59,7 +59,7 @@ int main(int argc, char **argv) {
     isDaemon = true;
   }
 
-  const int socketFd CLEANUP(cleanup_socket) = socket(AF_INET, SOCK_STREAM, 0);
+  const int socketFd CLEANUP(cleanup_socket) = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (socketFd == -1) {
     syslog(LOG_ERR, "Could not open the socket");
     return EXIT_FAILURE;

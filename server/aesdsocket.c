@@ -45,10 +45,15 @@ void signal_handler(int /* signal */){
   signalCaught = 1;
 }
 
-int main() {
+int main(int argc, char** argv) {
 
   openlog("aesdsocket", 0, LOG_USER);
   atexit(closelog); // Handle open logs at program exit
+
+  bool isDaemon = false;
+  if(argc > 1 && strcmp(argv[1], "-d") == 0){
+    isDaemon = true;
+  }
 
   const int socketFd CLEANUP(cleanup_socket) = socket(AF_INET, SOCK_STREAM, 0);
   if (socketFd == -1) {
@@ -76,6 +81,13 @@ int main() {
 
     if (bind(socketFd, addrResult->ai_addr, sizeof(struct sockaddr)) != 0) {
       syslog(LOG_ERR, "Could not bind to port");
+      return EXIT_FAILURE;
+    }
+  }
+
+  if(isDaemon){
+    if(daemon(0, 0) == -1){
+      syslog(LOG_ERR, "Needed to daemonize, but couldn't");
       return EXIT_FAILURE;
     }
   }

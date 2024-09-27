@@ -15,7 +15,7 @@
 #include <unistd.h>
 
 const char *SERVER_PORT = "9000";
-const int LISTEN_BACKLOG = 0;
+const int LISTEN_BACKLOG = 1;
 const char *TMP_FILE = "/var/tmp/aesdsocket";
 const size_t BUFFER_SIZE_INCREMENT = 1024;
 

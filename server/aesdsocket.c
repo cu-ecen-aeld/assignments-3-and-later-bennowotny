@@ -14,6 +14,8 @@
 #include <syslog.h>
 #include <unistd.h>
 
+#include "server_behavior.h"
+
 const char *SERVER_PORT = "9000";
 const int LISTEN_BACKLOG = 1;
 const char *TMP_FILE = "/var/tmp/aesdsocket";
@@ -201,6 +203,8 @@ int main(int argc, char **argv) {
   if(signalCaught){
     syslog(LOG_INFO, "Caught signal, exiting");
   }
+
+  printf("%d", test());
 
   // Variables that are stack-allocated will have a 'destructor' called
   // automatically

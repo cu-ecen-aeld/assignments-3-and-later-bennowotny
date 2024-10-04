@@ -15,16 +15,16 @@
 #include <unistd.h>
 
 #include "server_behavior.h"
+#include "cleanup.h"
 
 const char *SERVER_PORT = "9000";
 const int LISTEN_BACKLOG = 1;
 const char *TMP_FILE = "/var/tmp/aesdsocket";
-const size_t BUFFER_SIZE_INCREMENT = 1024;
 
-void cleanup_fd(const int *fd) {
-  if (*fd != -1)
-    close(*fd);
-}
+/**
+ * @brief Cleanup utilities only needed by the server management
+ */
+
 
 void cleanup_socket(const int *socketFd) {
   if (*socketFd != -1) {
@@ -39,10 +39,6 @@ void cleanup_tmpfile(FILE **fp) {
   unlink(TMP_FILE);
   fclose(*fp);
 }
-
-void cleanup_databuffer(char **ptr) { free(*ptr); }
-
-#define CLEANUP(x) __attribute__((__cleanup__(x)))
 
 static sig_atomic_t signalCaught = 0;
 
@@ -134,77 +130,18 @@ int main(int argc, char **argv) {
               addrString, sizeof(connectedAddr));
     syslog(LOG_INFO, "Accepted connection from %s", addrString);
 
-    char *dataBuf CLEANUP(cleanup_databuffer) = malloc(BUFFER_SIZE_INCREMENT);
-    if (dataBuf == NULL) {
-      syslog(LOG_ERR, "Could not malloc initial buffer resource");
-      return EXIT_FAILURE;
-    }
-    size_t dataBufferAllocationSize = BUFFER_SIZE_INCREMENT;
-    size_t dataBufferSize = 0;
-    bzero(dataBuf, BUFFER_SIZE_INCREMENT);
-    bool packetComplete = false;
-
-    while (!packetComplete) {
-      ssize_t recvDataSize = 0;
-      // Leave space for a null-termination character
-      if ((recvDataSize = recv(connectionSocketFd, dataBuf + dataBufferSize,
-                               BUFFER_SIZE_INCREMENT - 1, 0)) < 0) {
-        syslog(LOG_ERR, "Failed to get received data from socket!");
-        return EXIT_FAILURE;
-      }
-      dataBufferSize += recvDataSize;
-      const char *const endOfPacket = strstr(dataBuf, "\n");
-      if (endOfPacket == NULL) {
-        // Did not hear a newline yet; keep searching
-        dataBuf =
-            realloc(dataBuf, dataBufferAllocationSize + BUFFER_SIZE_INCREMENT);
-        if (dataBuf == NULL) {
-          syslog(LOG_ERR, "Reallocating packet buffer failed");
-          return EXIT_FAILURE;
-        }
-        dataBufferAllocationSize += BUFFER_SIZE_INCREMENT;
-        bzero(dataBuf + dataBufferSize,
-              dataBufferAllocationSize - dataBufferSize);
-      } else {
-        // We found the packet end!  Progress to the next step
-        dataBufferSize = endOfPacket - dataBuf + 1; // Incl. newline
-        packetComplete = true;
-      }
-    }
-
-    // write data to file
-    fseek(tmpfile, 0, SEEK_END);
-    if (fwrite(dataBuf, sizeof(char), dataBufferSize, tmpfile) !=
-        dataBufferSize) {
-      syslog(LOG_ERR, "Could not write packet data to file");
+    if(on_server_connection(connectionSocketFd, tmpfile) != EXIT_SUCCESS){
+      syslog(LOG_ERR, "Server processing failed");
       return EXIT_FAILURE;
     }
 
-    // write file to socket
-    char *fileBuf CLEANUP(cleanup_databuffer) = malloc(BUFFER_SIZE_INCREMENT);
-    if (fileBuf == NULL) {
-      syslog(LOG_ERR, "Could not malloc initial buffer resource");
-      return EXIT_FAILURE;
-    }
-    size_t bytesRead = 0;
-    fseek(tmpfile, 0, SEEK_SET);
-    while ((bytesRead = fread(fileBuf, sizeof(char), BUFFER_SIZE_INCREMENT,
-                              tmpfile)) != 0) {
-      // More data to read
-      if (send(connectionSocketFd, fileBuf, bytesRead, 0) != bytesRead) {
-        syslog(LOG_ERR, "Could not send data to client");
-        return EXIT_FAILURE;
-      }
-    }
-
+    // Connection closed automatically due to scoped cleanup of connectionSocketFd
     syslog(LOG_INFO, "Closed connection from %s", addrString);
   }
 
   if(signalCaught){
     syslog(LOG_INFO, "Caught signal, exiting");
   }
-
-  printf("%d", test());
 
   // Variables that are stack-allocated will have a 'destructor' called
   // automatically

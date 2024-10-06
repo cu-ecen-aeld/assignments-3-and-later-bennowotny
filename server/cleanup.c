@@ -8,3 +8,12 @@ void cleanup_fd(const int *fd) {
 }
 
 void cleanup_databuffer(char **ptr) { free(*ptr); }
+
+void cleanup_socket(const int *socketFd) {
+  if (*socketFd != -1) {
+    shutdown(*socketFd, SHUT_RDWR);
+    cleanup_fd(socketFd);
+  }
+}
+
+void cleanup_malloc(void* mem){free(mem);}

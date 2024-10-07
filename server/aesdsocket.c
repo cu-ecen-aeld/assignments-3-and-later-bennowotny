@@ -140,8 +140,10 @@ int main(int argc, char **argv) {
   }
 
   // setup server multithreading
+  pthread_t timestampThread;
+  pthread_mutex_t endTimestamping;
   pthread_mutex_t tmp; // No cleanup, temporary copy of the mutex
-  if(on_server_initialize(&tmp) != EXIT_SUCCESS){
+  if(on_server_initialize(&tmp, &timestampThread, tmpfile, &endTimestamping) != EXIT_SUCCESS){
     syslog(LOG_ERR, "Could not initialize the server");
     return EXIT_FAILURE;
   }
@@ -202,6 +204,9 @@ int main(int argc, char **argv) {
   if(signalCaught){
     syslog(LOG_INFO, "Caught signal, exiting");
   }
+
+  pthread_mutex_unlock(&endTimestamping);
+  pthread_join(timestampThread, NULL);
 
   // Variables that are stack-allocated will have a 'destructor' called
   // automatically

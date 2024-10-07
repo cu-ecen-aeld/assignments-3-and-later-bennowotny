@@ -1,12 +1,18 @@
 #include "server_behavior.h"
 #include "cleanup.h"
 #include <bits/pthreadtypes.h>
+#include <bits/time.h>
+#include <bits/types/sigset_t.h>
 #include <pthread.h>
+#include <signal.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/syslog.h>
+#include <errno.h>
+#include <time.h>
 
 const size_t BUFFER_SIZE_INCREMENT = 1024;
 
@@ -120,11 +126,108 @@ static void* server_work_thread(void* param) {
   THREAD_RETURN_SUCCESS;
 }
 
-int on_server_initialize(pthread_mutex_t *out_tmpFileMutex){
+typedef struct{
+  pthread_mutex_t *tmpFileMutex;
+  FILE* tmpFile;
+  pthread_mutex_t* endTimestamping;
+} timestamp_params_t;
+
+#define MS_PER_SEC  (1000)
+#define NS_PER_MS   (1000000)
+
+// static struct timespec ms_to_timespec(uint32_t ms){
+//     const uint32_t sec = ms / MS_PER_SEC;
+//     ms %= MS_PER_SEC;
+//     return (struct timespec) {.tv_sec = sec, .tv_nsec = ms * NS_PER_MS};
+// }
+
+// static int sleep_ms(uint32_t ms){
+//     struct timespec waiting_time = ms_to_timespec(ms);
+//     struct timespec remaining_time;
+//     while(nanosleep(&waiting_time, &remaining_time) == -1){
+//         if(errno == EINTR){
+//             waiting_time = remaining_time;
+//         }else{
+//             return EXIT_FAILURE;
+//         }
+//     }
+//     return EXIT_SUCCESS;
+// }
+
+// Sleep for 10s
+#define SLEEP_TIME_MS  (10000)
+
+static void* record_timestamp(void* param){
+  const timestamp_params_t *parsedParams = (timestamp_params_t*) param;
+  FILE* tmpFile = parsedParams->tmpFile;
+  pthread_mutex_t* tmpFileMutex = parsedParams->tmpFileMutex;
+  pthread_mutex_t* endTimestamping = parsedParams->endTimestamping;
+  free(param);
+
+  while(true){
+    struct timespec currTime;
+    clock_gettime(CLOCK_REALTIME, &currTime);
+    currTime.tv_sec += 10;
+    if(pthread_mutex_timedlock(endTimestamping, &currTime) != ETIMEDOUT){
+      break;
+    }
+
+    time_t wallTime = time(NULL);
+    struct tm* timestamp = localtime(&wallTime);
+    char timeString[1024] = "timestamp: "; // buffer for time string
+    // parse the time into a string, after the 'timestamp:' label
+    if(strftime(timeString + 11, 1024, "%a, %d %b %Y %T %z", timestamp) ==  0){
+      syslog(LOG_ERR, "Could not log time, try again later...");
+      continue;
+    }
+    const size_t timeString_len = strlen(timeString) + 1;
+    timeString[timeString_len - 1] = '\n'; // replace null-terminator with newline
+
+    // guard use of the file
+    pthread_mutex_lock(tmpFileMutex);
+    // write buffer to file
+    fseek(tmpFile, 0, SEEK_END);
+    if (fwrite(timeString, sizeof(char), timeString_len, tmpFile) !=
+        timeString_len) {
+      syslog(LOG_ERR, "Could not write timestamp data to file, try again later...");
+      pthread_mutex_unlock(tmpFileMutex);
+      continue;
+    }
+    pthread_mutex_unlock(tmpFileMutex);
+  }
+
+  return NULL;
+}
+
+int on_server_initialize(pthread_mutex_t *out_tmpFileMutex, pthread_t *out_timestampThread, FILE* tmpFile, pthread_mutex_t* endTimestamping){
   if(pthread_mutex_init(out_tmpFileMutex, NULL) != 0){
     syslog(LOG_ERR, "Could not initialize the mutex for the tempFile");
     return EXIT_FAILURE;
   }
+
+  if(pthread_mutex_init(endTimestamping, NULL) != 0){
+    syslog(LOG_ERR, "Could not initialize the mutex for the ending the timestamping");
+    return EXIT_FAILURE;
+  }
+  pthread_mutex_lock(endTimestamping);
+
+  timestamp_params_t* param = malloc(sizeof(timestamp_params_t));
+  if(param == NULL){
+    syslog(LOG_ERR, "Could not allocate space for thread parameters");
+    return EXIT_FAILURE;
+  }  
+
+  param->tmpFile = tmpFile;
+  param->tmpFileMutex = out_tmpFileMutex;
+  param->endTimestamping = endTimestamping;
+
+  if(pthread_create(out_timestampThread, NULL, record_timestamp, param) != 0){
+    syslog(LOG_ERR, "Could not start timestamping thread");
+    free(param);
+    return EXIT_FAILURE;
+  }
+
+  // From here, the thread must free the parameters
 
   return EXIT_SUCCESS;
 }

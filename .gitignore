@@ -9,3 +9,5 @@ test.sh.log
 
 compile_commands.json
 .cache/
+aesdsocket
+valgrind-out.txt

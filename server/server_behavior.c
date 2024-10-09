@@ -135,25 +135,6 @@ typedef struct{
 #define MS_PER_SEC  (1000)
 #define NS_PER_MS   (1000000)
 
-// static struct timespec ms_to_timespec(uint32_t ms){
-//     const uint32_t sec = ms / MS_PER_SEC;
-//     ms %= MS_PER_SEC;
-//     return (struct timespec) {.tv_sec = sec, .tv_nsec = ms * NS_PER_MS};
-// }
-
-// static int sleep_ms(uint32_t ms){
-//     struct timespec waiting_time = ms_to_timespec(ms);
-//     struct timespec remaining_time;
-//     while(nanosleep(&waiting_time, &remaining_time) == -1){
-//         if(errno == EINTR){
-//             waiting_time = remaining_time;
-//         }else{
-//             return EXIT_FAILURE;
-//         }
-//     }
-//     return EXIT_SUCCESS;
-// }
-
 // Sleep for 10s
 #define SLEEP_TIME_MS  (10000)
 

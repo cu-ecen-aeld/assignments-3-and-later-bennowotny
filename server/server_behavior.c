@@ -13,6 +13,7 @@
 #include <sys/syslog.h>
 #include <errno.h>
 #include <time.h>
+#include <unistd.h>
 
 const size_t BUFFER_SIZE_INCREMENT = 1024;
 
@@ -95,6 +96,9 @@ static void* server_work_thread(void* param) {
       pthread_mutex_unlock(tmpFileMutex);
       THREAD_RETURN_FAILURE;
     }
+    fflush(tmpFile);
+    const int tmpFileFd = fileno(tmpFile);
+    fsync(tmpFileFd);
     pthread_mutex_unlock(tmpFileMutex);
   } // Clean up inbound packet resources
 

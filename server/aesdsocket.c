@@ -52,7 +52,7 @@ void cleanup_slist(struct thread_list_head_t* head){
     SLIST_REMOVE_HEAD(head, _entry);
     int* threadReturnCode;
     pthread_join(entry->worker_thread, (void**)&threadReturnCode);
-    if(threadReturnCode != EXIT_SUCCESS){
+    if(*threadReturnCode != EXIT_SUCCESS){
       syslog(LOG_ERR, "Thread ID %lu failed during processing", entry->worker_thread);
     }
     free(threadReturnCode);

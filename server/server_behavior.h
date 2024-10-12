@@ -2,6 +2,7 @@
 #define SERVER_BEHAVIOR_H
 
 #include <netinet/in.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <pthread.h>
 
@@ -15,10 +16,11 @@
  * @param clientAddr The client address, reported on connection closure
  * @param out_thread A pthread that can be joined when work is complete.  
  * Joining returns EXIT_SUCCESS on packet handled or else EXIT_FAILURE (as int*, memory must be freed by the joiner)
+ * @param out_flag a completion_flag, cleared on thread finalization
  * @return EXIT_SUCCESS if the thread was started, EXIT_FAILURE on error.  The
  * program should clean up and close on EXIT_FAILURE
  */
-int on_server_connection(int connectionFd, FILE *tmpFile, pthread_mutex_t* tmpFileMutex,  char clientAddr[INET_ADDRSTRLEN], pthread_t* out_thread);
+int on_server_connection(int connectionFd, FILE *tmpFile, pthread_mutex_t* tmpFileMutex,  char clientAddr[INET_ADDRSTRLEN], pthread_t* out_thread, atomic_flag* out_flag);
 
 /**
  * @brief Setup the server's multithreading implementation

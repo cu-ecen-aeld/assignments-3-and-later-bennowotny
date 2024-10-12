@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +23,7 @@ typedef struct {
   FILE *tmpFile;                    // shared across connections - LOCK
   pthread_mutex_t *tmpFileMutex;    // locks above variable
   char clientAddr[INET_ADDRSTRLEN]; // copied per connection - no locking
+  atomic_flag *completeFlag;        // unique per connection - no locking
   int *returnCode;                  // unique per connection - no locking
 } server_thread_param_t;
 
@@ -38,9 +40,11 @@ void cleanup_client_addr(char **addr) {
   syslog(LOG_INFO, "Closed connection from %s", *addr);
 }
 
+void cleanup_completion_flag(atomic_flag **flag) { atomic_flag_clear(*flag); }
+
 /**
  * @brief Write to the end of a file, guarded by a mutex
- * 
+ *
  * @param data character buffer to write
  * @param dataSize number of characters to wrilte
  * @param file FILE* to the output file
@@ -74,11 +78,14 @@ static void *server_work_thread(void *param) {
   FILE *tmpFile = parsedParams->tmpFile;
   char clientAddr[INET_ADDRSTRLEN];
   memcpy(clientAddr, parsedParams->clientAddr, INET_ADDRSTRLEN);
-  char *clientAddrBegin CLEANUP(
-      cleanup_client_addr); // Token variable to print out the client address on
-                            // closing the connection
+  char *clientAddrBegin CLEANUP(cleanup_client_addr) =
+      clientAddr; // Token variable to print out the client address on
+                  // closing the connection
   int *returnCode = parsedParams->returnCode;
   pthread_mutex_t *tmpFileMutex = parsedParams->tmpFileMutex;
+  // autoclear flag on exit
+  atomic_flag *completionFlag CLEANUP(cleanup_completion_flag) =
+      parsedParams->completeFlag;
   // All parameter data copied, we can free the parameter block
   free(param);
 
@@ -249,7 +256,7 @@ int on_server_initialize(pthread_mutex_t *out_tmpFileMutex,
 int on_server_connection(int connectionFd, FILE *tmpFile,
                          pthread_mutex_t *tmpFileMutex,
                          char clientAddr[INET_ADDRSTRLEN],
-                         pthread_t *out_thread) {
+                         pthread_t *out_thread, atomic_flag *out_flag) {
 
   server_thread_param_t *param = malloc(sizeof(server_thread_param_t));
   if (param == NULL) {
@@ -271,7 +278,9 @@ int on_server_connection(int connectionFd, FILE *tmpFile,
     free(param);
     return EXIT_FAILURE;
   }
-  *(param->returnCode) = EXIT_FAILURE; // assume failure
+  *(param->returnCode) = EXIT_FAILURE;      // assume failure
+  (void)atomic_flag_test_and_set(out_flag); // assume incomplete
+  param->completeFlag = out_flag;
 
   if (pthread_create(out_thread, NULL, server_work_thread, (void *)param) !=
       0) {

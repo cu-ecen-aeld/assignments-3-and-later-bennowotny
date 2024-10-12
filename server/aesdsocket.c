@@ -21,7 +21,7 @@
 #include "cleanup.h"
 
 const char *SERVER_PORT = "9000";
-const int LISTEN_BACKLOG = 1;
+const int LISTEN_BACKLOG = 20;
 const char *TMP_FILE = "/var/tmp/aesdsocket";
 
 /**
@@ -189,7 +189,7 @@ int main(int argc, char **argv) {
     }
 
     // Run the server behavior (read a line, write the file)
-    if(on_server_connection(connectionSocketFd, tmpfile, &tmpFileMutex, &(threadTrackingData->worker_thread)) != EXIT_SUCCESS){
+    if(on_server_connection(connectionSocketFd, tmpfile, &tmpFileMutex, addrString, &(threadTrackingData->worker_thread)) != EXIT_SUCCESS){
       syslog(LOG_ERR, "Server processing failed");
       free(threadTrackingData);
       return EXIT_FAILURE;
@@ -205,6 +205,7 @@ int main(int argc, char **argv) {
     syslog(LOG_INFO, "Caught signal, exiting");
   }
 
+  // stop the timestamping thread's sleep
   pthread_mutex_unlock(&endTimestamping);
   pthread_join(timestampThread, NULL);
 

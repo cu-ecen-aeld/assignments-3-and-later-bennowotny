@@ -1,7 +1,7 @@
 #ifndef SERVER_BEHAVIOR_H
 #define SERVER_BEHAVIOR_H
 
-#include <stdatomic.h>
+#include <netinet/in.h>
 #include <stdio.h>
 #include <pthread.h>
 
@@ -11,12 +11,14 @@
  *
  * @param connectionFd A file descriptor for the active connection
  * @param tmpFile A FILE pointer to the tempfile (needs RW access)
+ * @param tmpFileMutex A mutex to protect I/O to the @ref tmpFile
+ * @param clientAddr The client address, reported on connection closure
  * @param out_thread A pthread that can be joined when work is complete.  
  * Joining returns EXIT_SUCCESS on packet handled or else EXIT_FAILURE (as int*, memory must be freed by the joiner)
  * @return EXIT_SUCCESS if the thread was started, EXIT_FAILURE on error.  The
  * program should clean up and close on EXIT_FAILURE
  */
-int on_server_connection(int connectionFd, FILE *tmpFile, pthread_mutex_t* tmpFileMutex, pthread_t* out_thread);
+int on_server_connection(int connectionFd, FILE *tmpFile, pthread_mutex_t* tmpFileMutex,  char clientAddr[INET_ADDRSTRLEN], pthread_t* out_thread);
 
 /**
  * @brief Setup the server's multithreading implementation

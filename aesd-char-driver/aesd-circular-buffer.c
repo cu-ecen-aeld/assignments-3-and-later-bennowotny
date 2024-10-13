@@ -16,7 +16,7 @@
 
 #include "aesd-circular-buffer.h"
 
-#define AESD_BUFFER_INCREMENT(x) (((x) + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
+#define AESD_BUFFER_INCREMENT(x) ((x) = (((x) + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED))
 
 /**
  * @param buffer the buffer to search for corresponding offset.  Any necessary locking must be performed by caller.
@@ -36,13 +36,13 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
         AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED : 
         (buffer->in_offs + AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED - buffer->out_offs) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; // avoid negative modulus shenannigans
     size_t blocksSearched = 0;
-    while(char_offset > buffer->entry[currBlockOffset].size && blocksSearched < numBlocksToSearch){
+    while(char_offset >= buffer->entry[currBlockOffset].size && blocksSearched < numBlocksToSearch){
         char_offset -= buffer->entry[currBlockOffset].size;
         AESD_BUFFER_INCREMENT(currBlockOffset);
         ++blocksSearched;
     }
 
-    if(char_offset > buffer->entry[currBlockOffset].size && blocksSearched >= numBlocksToSearch){
+    if(blocksSearched >= numBlocksToSearch){
         return NULL; // Exhausted filled-in blocks
     }
 
@@ -61,8 +61,9 @@ void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const s
 {
     buffer->entry[buffer->in_offs] = *add_entry;
     AESD_BUFFER_INCREMENT(buffer->in_offs);
-    if((buffer->in_offs == buffer->out_offs && !(buffer->full)) || (buffer->full)){
+    if(buffer->in_offs == buffer->out_offs && !(buffer->full)){
         buffer->full = true;
+    }else if(buffer->full){
         AESD_BUFFER_INCREMENT(buffer->out_offs);
     }
 }

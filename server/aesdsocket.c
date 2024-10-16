@@ -1,43 +1,63 @@
 #include <arpa/inet.h>
 #include <asm-generic/socket.h>
+#include <bits/pthreadtypes.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/queue.h>
 #include <sys/socket.h>
 #include <sys/syslog.h>
 #include <sys/types.h>
 #include <syslog.h>
 #include <unistd.h>
 
-#include "server_behavior.h"
 #include "cleanup.h"
+#include "server_behavior.h"
 
 const char *SERVER_PORT = "9000";
-const int LISTEN_BACKLOG = 1;
+const int LISTEN_BACKLOG = 20; // Listen for more connections simultaneously
 const char *TMP_FILE = "/var/tmp/aesdsocket";
 
 /**
  * @brief Cleanup utilities only needed by the server management
  */
 
-
-void cleanup_socket(const int *socketFd) {
-  if (*socketFd != -1) {
-    shutdown(*socketFd, SHUT_RDWR);
-    cleanup_fd(socketFd);
-  }
-}
-
 void cleanup_addrinfo(struct addrinfo **info) { freeaddrinfo(*info); }
 
 void cleanup_tmpfile(FILE **fp) {
   unlink(TMP_FILE);
   fclose(*fp);
+}
+
+void cleanup_mutex(pthread_mutex_t *mutex) { pthread_mutex_destroy(mutex); }
+
+struct thread_entry_t {
+  pthread_t worker_thread;
+  atomic_flag thread_complete;
+  SLIST_ENTRY(thread_entry_t) _entry;
+};
+
+SLIST_HEAD(thread_list_head_t, thread_entry_t);
+
+void cleanup_slist(struct thread_list_head_t *head) {
+  while (!SLIST_EMPTY(head)) {
+    struct thread_entry_t *entry = (struct thread_entry_t *)SLIST_FIRST(head);
+    SLIST_REMOVE_HEAD(head, _entry);
+    int *threadReturnCode;
+    pthread_join(entry->worker_thread, (void **)&threadReturnCode);
+    if (*threadReturnCode != EXIT_SUCCESS) {
+      syslog(LOG_ERR, "Thread ID %lu failed during processing",
+             entry->worker_thread);
+    }
+    free(threadReturnCode);
+    free(entry);
+  }
 }
 
 static sig_atomic_t signalCaught = 0;
@@ -68,16 +88,17 @@ int main(int argc, char **argv) {
   }
 
   // Allow port reuse, even if the TCP shutdown states aren't complete
-  if(setsockopt(socketFd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) != 0){
+  if (setsockopt(socketFd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) !=
+      0) {
     // Not a failure, keep going until we fail to bind the socket
-    syslog(LOG_WARNING, "Could not configure address reuse, may cause spurious failures");
+    syslog(LOG_WARNING,
+           "Could not configure address reuse, may cause spurious failures");
   }
 
   {
     struct addrinfo hints;
     // Scoped in to destroy when finished using this
     struct addrinfo *addrResult CLEANUP(cleanup_addrinfo);
-
 
     // Set up binding of socket to port
     bzero(&hints, sizeof(hints));
@@ -119,6 +140,22 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
+  // setup server multithreading
+  pthread_t timestampThread;
+  pthread_mutex_t endTimestamping;
+  pthread_mutex_t tmp; // No cleanup, temporary copy of the mutex
+  if (on_server_initialize(&tmp, &timestampThread, tmpfile, &endTimestamping) !=
+      EXIT_SUCCESS) {
+    syslog(LOG_ERR, "Could not initialize the server");
+    return EXIT_FAILURE;
+  }
+  pthread_mutex_t tmpFileMutex CLEANUP(cleanup_mutex) =
+      tmp; // Longterm mutex storage, requires cleanup
+
+  // thread storage for worker threads
+  struct thread_list_head_t threadList CLEANUP(cleanup_slist);
+  SLIST_INIT(&threadList);
+
   // Register signal handling on SIGINT and SIGTERM
   struct sigaction signalBehavior = {0};
   signalBehavior.sa_flags = SA_SIGINFO;
@@ -131,9 +168,11 @@ int main(int argc, char **argv) {
     // Wait for a connection
     struct sockaddr connectedAddr;
     socklen_t addrLen = sizeof(connectedAddr);
-    const int connectionSocketFd CLEANUP(cleanup_socket) =
-        accept(socketFd, &connectedAddr, &addrLen);
-    // Handle the case where we catch our signal while waiting to accept a connection
+    // DON'T clean up the socket at this scope.  The thread lives longer, so it
+    // should do cleanup
+    const int connectionSocketFd = accept(socketFd, &connectedAddr, &addrLen);
+    // Handle the case where we catch our signal while waiting to accept a
+    // connection
     if (connectionSocketFd == -1 && signalCaught == 0) {
       syslog(LOG_ERR, "Error when waiting for a connection");
       return EXIT_FAILURE;
@@ -147,19 +186,58 @@ int main(int argc, char **argv) {
               addrString, sizeof(connectedAddr));
     syslog(LOG_INFO, "Accepted connection from %s", addrString);
 
-    // Run the server behavior (read a line, write the file)
-    if(on_server_connection(connectionSocketFd, tmpfile) != EXIT_SUCCESS){
-      syslog(LOG_ERR, "Server processing failed");
+    // DON'T clean up the memory here, since we would destroy it too early
+    struct thread_entry_t *threadTrackingData =
+        malloc(sizeof(struct thread_entry_t));
+    if (threadTrackingData == NULL) {
+      syslog(LOG_ERR, "Could not allocate thread tracking structure");
       return EXIT_FAILURE;
     }
 
-    // Connection closed automatically due to scoped cleanup of connectionSocketFd
-    syslog(LOG_INFO, "Closed connection from %s", addrString);
+    // Run the server behavior (read a line, write the file)
+    if (on_server_connection(connectionSocketFd, tmpfile, &tmpFileMutex,
+                             addrString, &(threadTrackingData->worker_thread),
+                             &(threadTrackingData->thread_complete)) !=
+        EXIT_SUCCESS) {
+      syslog(LOG_ERR, "Server processing failed");
+      free(threadTrackingData);
+      return EXIT_FAILURE;
+    }
+
+    SLIST_INSERT_HEAD(&threadList, threadTrackingData, _entry);
+
+    // Clean up existing threads when we make a new one
+    struct thread_entry_t *threadEntry;
+    struct thread_entry_t *lastEntry = NULL;
+    SLIST_FOREACH(threadEntry, &threadList, _entry){
+      if(!atomic_flag_test_and_set(&(threadEntry->thread_complete))){
+        // flag cleared on complete
+        int *threadReturnCode;
+        pthread_join(threadEntry->worker_thread, (void **)&threadReturnCode);
+        if (*threadReturnCode != EXIT_SUCCESS) {
+          syslog(LOG_ERR, "Thread ID %lu failed during processing",
+                threadEntry->worker_thread);
+        }
+        free(threadReturnCode);
+        
+        SLIST_REMOVE(&threadList, threadEntry, thread_entry_t, _entry);
+        free(threadEntry);
+        if(lastEntry != NULL){
+          threadEntry = lastEntry; // Restore iteration
+        }
+      }
+      lastEntry = threadEntry;
+    }
+
   }
-  
-  if(signalCaught){
+
+  if (signalCaught) {
     syslog(LOG_INFO, "Caught signal, exiting");
   }
+
+  // stop the timestamping thread's sleep
+  pthread_mutex_unlock(&endTimestamping);
+  pthread_join(timestampThread, NULL);
 
   // Variables that are stack-allocated will have a 'destructor' called
   // automatically

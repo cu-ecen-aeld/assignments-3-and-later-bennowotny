@@ -1,7 +1,6 @@
 #ifndef CLEANUP_H
 #define CLEANUP_H
 
-#include <stdio.h>
 #include <netdb.h>
 
 /**
@@ -27,5 +26,19 @@ void cleanup_fd(const int *fd);
  * @param ptr buffer
  */
 void cleanup_databuffer(char **ptr);
+
+/**
+ * @brief Close a socket
+ * 
+ * @param socketFd socket
+ */
+void cleanup_socket(const int *socketFd);
+
+/**
+ * @brief Free a malloc'd block
+ * 
+ * @param mem malloc block
+ */
+void cleanup_malloc(void* mem);
 
 #endif

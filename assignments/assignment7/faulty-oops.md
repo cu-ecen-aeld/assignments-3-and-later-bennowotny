@@ -90,6 +90,27 @@ Call trace:
  ...
 ```
 
+We might want to investigate the addresses mentioned in the kernel modules to see if we can find offending instructions.  Using a cross-`objdump` on the `faulty.ko` module shows us the following:
+
+```console
+./buildroot/output/build/ldd-d980877eb69c1ad6d90ce187f17916ef3585ede1/misc-modules/faulty.ko:     file format elf64-littleaarch64
+
+
+Disassembly of section .text:
+
+0000000000000000 <faulty_write>:
+   0:   d2800001        mov     x1, #0x0                        // #0
+   4:   d2800000        mov     x0, #0x0                        // #0
+   8:   d503233f        paciasp
+   c:   d50323bf        autiasp
+  10:   b900003f        str     wzr, [x1]
+  14:   d65f03c0        ret
+  18:   d503201f        nop
+  1c:   d503201f        nop
+```
+
+Here, we see that we explicitly load `0` on instruction `<faulty_write>+0x0` and try to write to it as an address on instruction `<faulty_write>+0x10`.  This seems very much like an intentional write to the `NULL` address.
+
 At this point, it would be a good idea to search through the kernel source files, in particular the extra modules loaded, and look for a function called `faulty_write` to see if there is a candidate for the bad access.  Sure enough, in the `faulty.c` source file for the `faulty` kernel module:
 
 ```c

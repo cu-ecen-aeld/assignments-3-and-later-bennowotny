@@ -18,6 +18,7 @@
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
 #include "aesdchar.h"
+#include "linux/uaccess.h"
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -47,12 +48,24 @@ int aesd_release(struct inode *inode, struct file *filp)
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                 loff_t *f_pos)
 {
-    ssize_t retval = 0;
+    char* data = "Hello, world!\n";
+    size_t dataLen = 15;
     PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
     /**
      * TODO: handle read
      */
-    return retval;
+
+    if(*f_pos == 0){
+        if(access_ok(buf, count)){
+            dataLen = dataLen > count ? count : dataLen;
+            if(copy_to_user(buf, data, dataLen) == 0){
+                *f_pos += dataLen;
+                return dataLen;
+            }
+        }
+    }
+
+    return 0;
 }
 
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,

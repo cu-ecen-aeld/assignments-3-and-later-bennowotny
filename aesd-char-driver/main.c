@@ -17,8 +17,12 @@
 #include <linux/types.h>
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
+#include <linux/mutex.h>
+#include <linux/slab.h>
+#include <linux/uaccess.h>
+
+#include "aesd-circular-buffer.h"
 #include "aesdchar.h"
-#include "linux/uaccess.h"
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -119,17 +123,28 @@ int aesd_init_module(void)
      * TODO: initialize the AESD specific portion of the device
      */
 
+    aesd_circular_buffer_init(&aesd_device.buffer);
+    mutex_init(&aesd_device.buffer_mutex);
+    mutex_init(&aesd_device.nextLine_mutex);
+    aesd_device.nextLine = NULL;
+    aesd_device.nextLineLength = 0;
+
     result = aesd_setup_cdev(&aesd_device);
 
-    if( result ) {
-        unregister_chrdev_region(dev, 1);
-    }
-    return result;
+    if( result ) 
+        goto cleanup_chrdev;
 
+    goto exit;
+
+cleanup_chrdev:
+    unregister_chrdev_region(dev, 1);
+exit:
+    return result;
 }
 
 void aesd_cleanup_module(void)
 {
+    int _;
     dev_t devno = MKDEV(aesd_major, aesd_minor);
 
     cdev_del(&aesd_device.cdev);
@@ -137,6 +152,15 @@ void aesd_cleanup_module(void)
     /**
      * TODO: cleanup AESD specific poritions here as necessary
      */
+
+    for(_ = 0; _ < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; ++_){
+        struct aesd_buffer_entry nullEntry = {.buffptr = NULL, .size = 0};
+        const char* data = aesd_circular_buffer_add_entry(&aesd_device.buffer, &nullEntry);
+        kfree(data);
+    }
+    kfree(aesd_device.nextLine);
+    mutex_destroy(&aesd_device.buffer_mutex);
+    mutex_destroy(&aesd_device.nextLine_mutex);
 
     unregister_chrdev_region(devno, 1);
 }

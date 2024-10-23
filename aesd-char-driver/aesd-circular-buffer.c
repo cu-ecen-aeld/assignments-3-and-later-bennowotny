@@ -16,6 +16,8 @@
 
 #include "aesd-circular-buffer.h"
 
+#define AESD_BUFFER_INCREMENT(x) ((x) = (((x) + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED))
+
 /**
  * @param buffer the buffer to search for corresponding offset.  Any necessary locking must be performed by caller.
  * @param char_offset the position to search for in the buffer list, describing the zero referenced
@@ -29,10 +31,23 @@
 struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buffer,
             size_t char_offset, size_t *entry_offset_byte_rtn )
 {
-    /**
-    * TODO: implement per description
-    */
-    return NULL;
+    size_t currBlockOffset = buffer->out_offs;
+    const size_t numBlocksToSearch = buffer->full ? 
+        AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED : 
+        (buffer->in_offs + AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED - buffer->out_offs) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; // avoid negative modulus shenannigans
+    size_t blocksSearched = 0;
+    while(char_offset >= buffer->entry[currBlockOffset].size && blocksSearched < numBlocksToSearch){
+        char_offset -= buffer->entry[currBlockOffset].size;
+        AESD_BUFFER_INCREMENT(currBlockOffset);
+        ++blocksSearched;
+    }
+
+    if(blocksSearched >= numBlocksToSearch){
+        return NULL; // Exhausted filled-in blocks
+    }
+
+    *entry_offset_byte_rtn = char_offset; // Amount of counting into the current block 
+    return &(buffer->entry[currBlockOffset]);
 }
 
 /**
@@ -44,9 +59,13 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 */
 void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
-    /**
-    * TODO: implement per description
-    */
+    buffer->entry[buffer->in_offs] = *add_entry;
+    AESD_BUFFER_INCREMENT(buffer->in_offs);
+    if(buffer->in_offs == buffer->out_offs && !(buffer->full)){
+        buffer->full = true;
+    }else if(buffer->full){
+        AESD_BUFFER_INCREMENT(buffer->out_offs);
+    }
 }
 
 /**

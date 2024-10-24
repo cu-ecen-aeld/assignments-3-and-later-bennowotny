@@ -80,6 +80,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 
     retval = (datablk->size - strOffset) > count ? count : (datablk->size - strOffset);
     *f_pos += retval;
+    PDEBUG("reading out %zu bytes", retval);
 
     if(copy_to_user(buf, datablk->buffptr + strOffset, retval) != 0){
         retval = -EINVAL;
@@ -217,6 +218,8 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         kfree(removedEntry);
 
         mutex_unlock(&aesd_device.buffer_mutex);
+        aesd_device.nextLine = NULL;
+        aesd_device.nextLineLength = 0;
         retval = count;
         *f_pos += count;
     }

@@ -23,6 +23,8 @@
 
 #include "aesd-circular-buffer.h"
 #include "aesdchar.h"
+#include "asm/string.h"
+#include "asm/uaccess.h"
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -72,16 +74,139 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     return 0;
 }
 
+static void* memmem(const void* haystack, size_t haystackSize, const void* needle, size_t needleSize){
+    const char* haystackData = haystack;
+    const char* needleData = needle;
+    size_t index = 0;
+    size_t matchSize = 0;
+
+    while(index < (haystackSize - needleSize + 1)){
+        while(matchSize < needleSize && (*(haystackData + index + matchSize) == *(needleData + matchSize))){
+            ++matchSize;
+        }
+        if(matchSize == needleSize){
+            return (void*)(haystackData + index);
+        }
+        matchSize = 0;
+        ++index;
+    }
+    return NULL;
+}
+
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
                 loff_t *f_pos)
 {
     ssize_t retval = -ENOMEM;
+    char* strBuf = NULL;
+    const char* eolPtr = NULL;
+    char* reallocPtr = NULL;
+    struct aesd_buffer_entry newEntry;
+    const char *removedEntry;
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
-    /**
-     * TODO: handle write
-     */
+    
+    if(!access_ok(buf, count)){
+        retval = -EINVAL;
+        goto exit;
+    }
+
+    strBuf = kmalloc(count, GFP_KERNEL);
+    if(strBuf == NULL){
+        retval = -ENOMEM;
+        goto exit;
+    }
+
+    if(copy_from_user(strBuf, buf, count) != 0){
+        retval = -EINVAL;
+        goto cleanup_tmpbuffer;
+    }
+
+    if(mutex_lock_interruptible(&aesd_device.nextLine_mutex) != 0){
+        retval = -EINTR;
+        goto cleanup_tmpbuffer;
+    }
+
+    eolPtr = memmem(strBuf, count, "\n", 2);
+    count = eolPtr == NULL ? count : eolPtr - strBuf;
+    if(eolPtr == NULL && aesd_device.nextLine == NULL){
+        // We don't have a newline or an existing line
+        // start a new one
+        aesd_device.nextLine = strBuf;
+        aesd_device.nextLineLength = count;    
+        // exit early, don't deallocate
+        retval = count;
+        *f_pos += count;
+        goto unlock_nxtLineMutex;
+    }else if(eolPtr == NULL && aesd_device.nextLine != NULL){
+        // We don't have a newline, but we already had a line going
+        // append
+        reallocPtr = krealloc(aesd_device.nextLine, aesd_device.nextLineLength + count, GFP_KERNEL);
+        if(reallocPtr == NULL){
+            // keep the command, return failure
+            retval = -ENOMEM;
+            goto unlock_nxtLineMutex;
+        }
+        aesd_device.nextLine = reallocPtr;
+        memcpy(aesd_device.nextLine + aesd_device.nextLineLength, strBuf, count);
+        aesd_device.nextLineLength += count;
+        retval = count;
+        *f_pos += count;
+    }else if(eolPtr != NULL && aesd_device.nextLine == NULL){
+        // We have a newline and no previous data pending
+        // skip the nextLine buffer, write straight to the buffer
+        if(mutex_lock_interruptible(&aesd_device.buffer_mutex) != 0){
+            retval = -EINTR;
+            goto cleanup_tmpbuffer;
+        }
+
+        newEntry.buffptr = strBuf;
+        newEntry.size = count;
+        removedEntry = aesd_circular_buffer_add_entry(&aesd_device.buffer, &newEntry);
+        kfree(removedEntry);
+
+        mutex_unlock(&aesd_device.buffer_mutex);
+        // exit early, don't free the buffer
+        retval = count;
+        *f_pos += count;
+        goto unlock_nxtLineMutex;
+    }else{
+        // We have a newline and previous data
+        // append the string and then steal the appended string
+        reallocPtr = krealloc(aesd_device.nextLine, aesd_device.nextLineLength + count, GFP_KERNEL);
+        if(reallocPtr == NULL){
+            // keep the command, return failure
+            retval = -ENOMEM;
+            goto unlock_nxtLineMutex;
+        }
+        aesd_device.nextLine = reallocPtr;
+        memcpy(aesd_device.nextLine + aesd_device.nextLineLength, strBuf, count);
+        aesd_device.nextLineLength += count;
+
+        if(mutex_lock_interruptible(&aesd_device.buffer_mutex) != 0){
+            retval = -EINTR;
+            goto cleanup_tmpbuffer;
+        }
+
+        newEntry.buffptr = aesd_device.nextLine;
+        newEntry.size = aesd_device.nextLineLength;
+        removedEntry = aesd_circular_buffer_add_entry(&aesd_device.buffer, &newEntry);
+        kfree(removedEntry);
+
+        mutex_unlock(&aesd_device.buffer_mutex);
+        retval = count;
+        *f_pos += count;
+    }
+
+
+    goto cleanup_tmpbuffer; // no-op, signifying intention
+
+cleanup_tmpbuffer:
+    kfree(strBuf);
+unlock_nxtLineMutex:
+    mutex_unlock(&aesd_device.nextLine_mutex);
+exit:    
     return retval;
 }
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,

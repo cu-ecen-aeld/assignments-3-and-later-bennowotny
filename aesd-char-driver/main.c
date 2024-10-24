@@ -123,8 +123,6 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     struct aesd_buffer_entry newEntry;
     const char *removedEntry;
 
-    struct aesd_buffer_entry* dbg_entry;
-    int dbg_i;
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
     
     if(!access_ok(buf, count)){
@@ -148,9 +146,10 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         goto cleanup_tmpbuffer;
     }
 
-    eolPtr = memmem(strBuf, count, "\n", 2);
-    count = eolPtr == NULL ? count : eolPtr - strBuf;
+    eolPtr = memmem(strBuf, count, "\n", 1);
+    count = eolPtr == NULL ? count : eolPtr - strBuf + 1;
     if(eolPtr == NULL && aesd_device.nextLine == NULL){
+        PDEBUG("op 1");
         // We don't have a newline or an existing line
         // start a new one
         aesd_device.nextLine = strBuf;
@@ -160,6 +159,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         *f_pos += count;
         goto unlock_nxtLineMutex;
     }else if(eolPtr == NULL && aesd_device.nextLine != NULL){
+        PDEBUG("op 2");
         // We don't have a newline, but we already had a line going
         // append
         reallocPtr = krealloc(aesd_device.nextLine, aesd_device.nextLineLength + count, GFP_KERNEL);
@@ -174,6 +174,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         retval = count;
         *f_pos += count;
     }else if(eolPtr != NULL && aesd_device.nextLine == NULL){
+        PDEBUG("op 3");
         // We have a newline and no previous data pending
         // skip the nextLine buffer, write straight to the buffer
         if(mutex_lock_interruptible(&aesd_device.buffer_mutex) != 0){
@@ -192,6 +193,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         *f_pos += count;
         goto unlock_nxtLineMutex;
     }else{
+        PDEBUG("op 4");
         // We have a newline and previous data
         // append the string and then steal the appended string
         reallocPtr = krealloc(aesd_device.nextLine, aesd_device.nextLineLength + count, GFP_KERNEL);
@@ -217,10 +219,6 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         mutex_unlock(&aesd_device.buffer_mutex);
         retval = count;
         *f_pos += count;
-    }
-
-    AESD_CIRCULAR_BUFFER_FOREACH(dbg_entry, &aesd_device.buffer, dbg_i){
-        PDEBUG("%s %zu\n", dbg_entry->buffptr, dbg_entry->size);
     }
 
     goto cleanup_tmpbuffer; // no-op, signifying intention

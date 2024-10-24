@@ -54,24 +54,44 @@ int aesd_release(struct inode *inode, struct file *filp)
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                 loff_t *f_pos)
 {
-    char* data = "Hello, world!\n";
-    size_t dataLen = 15;
+    ssize_t retval = -EINVAL;
+    struct aesd_buffer_entry *datablk = NULL;
+    size_t strOffset = 0;
     PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
     /**
      * TODO: handle read
      */
 
-    if(*f_pos == 0){
-        if(access_ok(buf, count)){
-            dataLen = dataLen > count ? count : dataLen;
-            if(copy_to_user(buf, data, dataLen) == 0){
-                *f_pos += dataLen;
-                return dataLen;
-            }
-        }
+    if(!access_ok(buf, count)){
+        retval = -EINVAL;
+        goto exit;
     }
 
-    return 0;
+    if(mutex_lock_interruptible(&aesd_device.buffer_mutex) != 0){
+        retval = -EINTR;
+        goto exit;
+    }
+
+    datablk = aesd_circular_buffer_find_entry_offset_for_fpos(&aesd_device.buffer, *f_pos, &strOffset);
+    if(datablk == NULL){
+        retval = 0;
+        goto unlock_bufferMtx;
+    }
+
+    retval = (datablk->size - strOffset) > count ? count : (datablk->size - strOffset);
+    *f_pos += retval;
+
+    if(copy_to_user(buf, datablk->buffptr + strOffset, retval) != 0){
+        retval = -EINVAL;
+        goto unlock_bufferMtx;
+    }
+
+    goto unlock_bufferMtx;
+
+unlock_bufferMtx:
+    mutex_unlock(&aesd_device.buffer_mutex);
+exit:
+    return retval;
 }
 
 static void* memmem(const void* haystack, size_t haystackSize, const void* needle, size_t needleSize){
@@ -102,6 +122,9 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     char* reallocPtr = NULL;
     struct aesd_buffer_entry newEntry;
     const char *removedEntry;
+
+    struct aesd_buffer_entry* dbg_entry;
+    int dbg_i;
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
     
     if(!access_ok(buf, count)){
@@ -196,6 +219,9 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         *f_pos += count;
     }
 
+    AESD_CIRCULAR_BUFFER_FOREACH(dbg_entry, &aesd_device.buffer, dbg_i){
+        PDEBUG("%s %zu\n", dbg_entry->buffptr, dbg_entry->size);
+    }
 
     goto cleanup_tmpbuffer; // no-op, signifying intention
 

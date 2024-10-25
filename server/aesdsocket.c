@@ -14,6 +14,7 @@
 #include <sys/socket.h>
 #include <sys/syslog.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <syslog.h>
 #include <unistd.h>
 
@@ -22,7 +23,13 @@
 
 const char *SERVER_PORT = "9000";
 const int LISTEN_BACKLOG = 20; // Listen for more connections simultaneously
-const char *TMP_FILE = "/var/tmp/aesdsocket";
+const char *TMP_FILE = 
+#if USE_AESD_CHAR_DEVICE
+"/dev/aesdchar"
+#else
+"/var/tmp/aesdsocket"
+#endif
+;
 
 /**
  * @brief Cleanup utilities only needed by the server management
@@ -31,7 +38,10 @@ const char *TMP_FILE = "/var/tmp/aesdsocket";
 void cleanup_addrinfo(struct addrinfo **info) { freeaddrinfo(*info); }
 
 void cleanup_tmpfile(FILE **fp) {
+  #if USE_AESD_CHAR_DEVICE
+  #else
   unlink(TMP_FILE);
+  #endif
   fclose(*fp);
 }
 
@@ -133,13 +143,30 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
+#if USE_AESD_CHAR_DEVICE
+  struct stat _;
+  while(stat(TMP_FILE, &_) != 0){
+    syslog(LOG_WARNING, "Could not open the aesdchar device, sleep for 1s and try again...");
+    sleep(1);
+  }
+#endif
+
   // Open/clear the storage file
-  FILE *tmpfile CLEANUP(cleanup_tmpfile) = fopen(TMP_FILE, "w+");
+  FILE *tmpfile CLEANUP(cleanup_tmpfile) = fopen(TMP_FILE, 
+#if USE_AESD_CHAR_DEVICE
+  "r+"
+#else
+  "w+"
+#endif
+  );
   if (tmpfile == NULL) {
     syslog(LOG_ERR, "Error when waiting for a connection");
     return EXIT_FAILURE;
   }
 
+#if USE_AESD_CHAR_DEVICE
+  setbuf(tmpfile, NULL);
+#endif
   // setup server multithreading
   pthread_t timestampThread;
   pthread_mutex_t endTimestamping;

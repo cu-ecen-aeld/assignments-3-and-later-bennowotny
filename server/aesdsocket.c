@@ -144,38 +144,27 @@ int main(int argc, char **argv) {
   }
 
 #if USE_AESD_CHAR_DEVICE
-  struct stat _;
-  while(stat(TMP_FILE, &_) != 0){
-    syslog(LOG_WARNING, "Could not open the aesdchar device, sleep for 1s and try again...");
-    sleep(1);
-  }
-#endif
-
-  // Open/clear the storage file
-  FILE *tmpfile CLEANUP(cleanup_tmpfile) = fopen(TMP_FILE, 
-#if USE_AESD_CHAR_DEVICE
-  "r+"
+  FILE* tmpfile CLEANUP(cleanup_tmpfile) = NULL;
 #else
-  "w+"
-#endif
-  );
+  // Open/clear the storage file
+  FILE *tmpfile CLEANUP(cleanup_tmpfile) = fopen(TMP_FILE, "w+");
   if (tmpfile == NULL) {
     syslog(LOG_ERR, "Error when waiting for a connection");
     return EXIT_FAILURE;
   }
-
-#if USE_AESD_CHAR_DEVICE
-  setbuf(tmpfile, NULL);
 #endif
+
   // setup server multithreading
   pthread_t timestampThread;
   pthread_mutex_t endTimestamping;
   pthread_mutex_t tmp; // No cleanup, temporary copy of the mutex
+#if USE_AESD_CHAR_DEVICE
   if (on_server_initialize(&tmp, &timestampThread, tmpfile, &endTimestamping) !=
       EXIT_SUCCESS) {
     syslog(LOG_ERR, "Could not initialize the server");
     return EXIT_FAILURE;
   }
+#endif
   pthread_mutex_t tmpFileMutex CLEANUP(cleanup_mutex) =
       tmp; // Longterm mutex storage, requires cleanup
 
@@ -220,6 +209,17 @@ int main(int argc, char **argv) {
       syslog(LOG_ERR, "Could not allocate thread tracking structure");
       return EXIT_FAILURE;
     }
+
+#if USE_AESD_CHAR_DEVICE
+    if(tmpfile == NULL){
+      tmpfile = fopen(TMP_FILE, "w+");
+      if (tmpfile == NULL) {
+        syslog(LOG_ERR, "Error when waiting for a connection");
+        return EXIT_FAILURE;
+      }
+      setbuf(tmpfile, NULL);
+    }
+#endif
 
     // Run the server behavior (read a line, write the file)
     if (on_server_connection(connectionSocketFd, tmpfile, &tmpFileMutex,

@@ -35,10 +35,13 @@ struct aesd_dev aesd_device;
 
 int aesd_open(struct inode *inode, struct file *filp)
 {
+    struct aesd_dev* devicePtr;
     PDEBUG("open");
     /**
      * TODO: handle open
      */
+    devicePtr = container_of(inode->i_cdev, struct aesd_dev, cdev);
+    filp->private_data = devicePtr;
     return 0;
 }
 
@@ -57,22 +60,26 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     ssize_t retval = -EINVAL;
     struct aesd_buffer_entry *datablk = NULL;
     size_t strOffset = 0;
+    struct aesd_dev* device;
     PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
     /**
      * TODO: handle read
      */
+
+    device = (struct aesd_dev*) (filp->private_data);
 
     if(!access_ok(buf, count)){
         retval = -EINVAL;
         goto exit;
     }
 
-    if(mutex_lock_interruptible(&aesd_device.buffer_mutex) != 0){
+    if(mutex_lock_interruptible(&device->buffer_mutex) != 0){
         retval = -EINTR;
         goto exit;
     }
 
-    datablk = aesd_circular_buffer_find_entry_offset_for_fpos(&aesd_device.buffer, *f_pos, &strOffset);
+    datablk = aesd_circular_buffer_find_entry_offset_for_fpos(&device->buffer, *f_pos, &strOffset);
+    PDEBUG("blk is %p", datablk);
     if(datablk == NULL){
         retval = 0;
         goto unlock_bufferMtx;
@@ -90,7 +97,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     goto unlock_bufferMtx;
 
 unlock_bufferMtx:
-    mutex_unlock(&aesd_device.buffer_mutex);
+    mutex_unlock(&device->buffer_mutex);
 exit:
     return retval;
 }
@@ -123,8 +130,11 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     char* reallocPtr = NULL;
     struct aesd_buffer_entry newEntry;
     const char *removedEntry;
+    struct aesd_dev* device;
 
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
+
+    device = (struct aesd_dev*) (filp->private_data);
     
     if(!access_ok(buf, count)){
         retval = -EINVAL;
@@ -142,53 +152,53 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         goto cleanup_tmpbuffer;
     }
 
-    if(mutex_lock_interruptible(&aesd_device.nextLine_mutex) != 0){
+    if(mutex_lock_interruptible(&device->nextLine_mutex) != 0){
         retval = -EINTR;
         goto cleanup_tmpbuffer;
     }
 
     eolPtr = memmem(strBuf, count, "\n", 1);
     count = eolPtr == NULL ? count : eolPtr - strBuf + 1;
-    if(eolPtr == NULL && aesd_device.nextLine == NULL){
+    if(eolPtr == NULL && device->nextLine == NULL){
         PDEBUG("op 1");
         // We don't have a newline or an existing line
         // start a new one
-        aesd_device.nextLine = strBuf;
-        aesd_device.nextLineLength = count;    
+        device->nextLine = strBuf;
+        device->nextLineLength = count;    
         // exit early, don't deallocate
         retval = count;
         *f_pos += count;
         goto unlock_nxtLineMutex;
-    }else if(eolPtr == NULL && aesd_device.nextLine != NULL){
+    }else if(eolPtr == NULL && device->nextLine != NULL){
         PDEBUG("op 2");
         // We don't have a newline, but we already had a line going
         // append
-        reallocPtr = krealloc(aesd_device.nextLine, aesd_device.nextLineLength + count, GFP_KERNEL);
+        reallocPtr = krealloc(device->nextLine, device->nextLineLength + count, GFP_KERNEL);
         if(reallocPtr == NULL){
             // keep the command, return failure
             retval = -ENOMEM;
             goto unlock_nxtLineMutex;
         }
-        aesd_device.nextLine = reallocPtr;
-        memcpy(aesd_device.nextLine + aesd_device.nextLineLength, strBuf, count);
-        aesd_device.nextLineLength += count;
+        device->nextLine = reallocPtr;
+        memcpy(device->nextLine + device->nextLineLength, strBuf, count);
+        device->nextLineLength += count;
         retval = count;
         *f_pos += count;
-    }else if(eolPtr != NULL && aesd_device.nextLine == NULL){
+    }else if(eolPtr != NULL && device->nextLine == NULL){
         PDEBUG("op 3");
         // We have a newline and no previous data pending
         // skip the nextLine buffer, write straight to the buffer
-        if(mutex_lock_interruptible(&aesd_device.buffer_mutex) != 0){
+        if(mutex_lock_interruptible(&device->buffer_mutex) != 0){
             retval = -EINTR;
             goto cleanup_tmpbuffer;
         }
 
         newEntry.buffptr = strBuf;
         newEntry.size = count;
-        removedEntry = aesd_circular_buffer_add_entry(&aesd_device.buffer, &newEntry);
+        removedEntry = aesd_circular_buffer_add_entry(&device->buffer, &newEntry);
         kfree(removedEntry);
 
-        mutex_unlock(&aesd_device.buffer_mutex);
+        mutex_unlock(&device->buffer_mutex);
         // exit early, don't free the buffer
         retval = count;
         *f_pos += count;
@@ -197,29 +207,29 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         PDEBUG("op 4");
         // We have a newline and previous data
         // append the string and then steal the appended string
-        reallocPtr = krealloc(aesd_device.nextLine, aesd_device.nextLineLength + count, GFP_KERNEL);
+        reallocPtr = krealloc(device->nextLine, device->nextLineLength + count, GFP_KERNEL);
         if(reallocPtr == NULL){
             // keep the command, return failure
             retval = -ENOMEM;
             goto unlock_nxtLineMutex;
         }
-        aesd_device.nextLine = reallocPtr;
-        memcpy(aesd_device.nextLine + aesd_device.nextLineLength, strBuf, count);
-        aesd_device.nextLineLength += count;
+        device->nextLine = reallocPtr;
+        memcpy(device->nextLine + device->nextLineLength, strBuf, count);
+        device->nextLineLength += count;
 
-        if(mutex_lock_interruptible(&aesd_device.buffer_mutex) != 0){
+        if(mutex_lock_interruptible(&device->buffer_mutex) != 0){
             retval = -EINTR;
             goto cleanup_tmpbuffer;
         }
 
-        newEntry.buffptr = aesd_device.nextLine;
-        newEntry.size = aesd_device.nextLineLength;
-        removedEntry = aesd_circular_buffer_add_entry(&aesd_device.buffer, &newEntry);
+        newEntry.buffptr = device->nextLine;
+        newEntry.size = device->nextLineLength;
+        removedEntry = aesd_circular_buffer_add_entry(&device->buffer, &newEntry);
         kfree(removedEntry);
 
-        mutex_unlock(&aesd_device.buffer_mutex);
-        aesd_device.nextLine = NULL;
-        aesd_device.nextLineLength = 0;
+        mutex_unlock(&device->buffer_mutex);
+        device->nextLine = NULL;
+        device->nextLineLength = 0;
         retval = count;
         *f_pos += count;
     }
@@ -234,12 +244,37 @@ exit:
     return retval;
 }
 
+loff_t aesd_llseek (struct file *fp, loff_t offset, int whence){
+    int retval = -EINVAL;
+    
+    PDEBUG("seeking to %lld with whence %d", offset, whence);
+
+    // writes to the end go to offset 0
+    if(whence == SEEK_END)
+        retval = 0;
+    // offsets from the beginning of the file go to their requested offset
+    else if(whence == SEEK_SET)
+        retval = offset;
+
+    if(retval >= 0)
+        fp->f_pos = retval;
+    return retval;
+}
+
+
+int aesd_fsync(struct file *fp, loff_t unused1, loff_t unused2, int datasync){
+    // data in memory, always synced
+    return 0;
+}
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
     .write =    aesd_write,
     .open =     aesd_open,
     .release =  aesd_release,
+    .llseek =   aesd_llseek,
+    .fsync =    aesd_fsync
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)

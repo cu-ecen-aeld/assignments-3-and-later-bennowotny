@@ -63,13 +63,10 @@ static int write_safe_to_file_end(char *data, size_t dataSize, FILE *file,
     return EXIT_FAILURE;
   }
   // flush data to disc, avoid relying on OS synchronization for the FS
-  printf("Preflush\n");
   fflush(file);
-  printf("Post fflush\n");
   
   const int tmpFileFd = fileno(file);
   fsync(tmpFileFd);
-  printf("Postflush\n");
   pthread_mutex_unlock(write_guard);
   return EXIT_SUCCESS;
 }
@@ -144,10 +141,8 @@ static void *server_work_thread(void *param) {
     }
   } // Clean up inbound packet resources
 
-  printf("Pre readlock\n");
   // guard use of the file
   pthread_mutex_lock(tmpFileMutex);
-  printf("Post readlock\n");
   // write file to socket
   char *fileBuf CLEANUP(cleanup_databuffer) = malloc(BUFFER_SIZE_INCREMENT);
   if (fileBuf == NULL) {
@@ -156,12 +151,9 @@ static void *server_work_thread(void *param) {
     THREAD_RETURN_FAILURE;
   }
   size_t bytesRead = 0;
-  printf("Pre SEEK_SET\n");
-  int tmp = fseek(tmpFile, 0, SEEK_SET);
-  printf("Post SEEK_SET %d\n", tmp);
+  fseek(tmpFile, 0, SEEK_SET);
   while ((bytesRead = fread(fileBuf, sizeof(char), BUFFER_SIZE_INCREMENT,
                             tmpFile)) != 0) {
-    printf("READ %zu\n", bytesRead);
     // More data to read
     if (send(connectionFd, fileBuf, bytesRead, 0) != bytesRead) {
       syslog(LOG_ERR, "Could not send data to client");
@@ -169,7 +161,6 @@ static void *server_work_thread(void *param) {
       THREAD_RETURN_FAILURE;
     }
   }
-  printf("READ COMPLETE\n");
 
   pthread_mutex_unlock(tmpFileMutex);
   // Clean up the writeback buffer on function scope end

@@ -23,6 +23,7 @@
 
 const char *SERVER_PORT = "9000";
 const int LISTEN_BACKLOG = 20; // Listen for more connections simultaneously
+// Use the device file if requested
 const char *TMP_FILE = 
 #if USE_AESD_CHAR_DEVICE
 "/dev/aesdchar"
@@ -144,6 +145,7 @@ int main(int argc, char **argv) {
   }
 
 #if USE_AESD_CHAR_DEVICE
+  // Don't open the file yet, wait until the server is referenced
   FILE* tmpfile CLEANUP(cleanup_tmpfile) = NULL;
 #else
   // Open/clear the storage file
@@ -154,11 +156,13 @@ int main(int argc, char **argv) {
   }
 #endif
 
+#if USE_AESD_CHAR_DEVICE
+  pthread_mutex_t tmp=PTHREAD_MUTEX_INITIALIZER; // avoid build warning for uninitialized variable
+#else
   // setup server multithreading
+  pthread_mutex_t tmp; // No cleanup, temporary copy of the mutex
   pthread_t timestampThread;
   pthread_mutex_t endTimestamping;
-  pthread_mutex_t tmp; // No cleanup, temporary copy of the mutex
-#if USE_AESD_CHAR_DEVICE
   if (on_server_initialize(&tmp, &timestampThread, tmpfile, &endTimestamping) !=
       EXIT_SUCCESS) {
     syslog(LOG_ERR, "Could not initialize the server");
@@ -211,6 +215,7 @@ int main(int argc, char **argv) {
     }
 
 #if USE_AESD_CHAR_DEVICE
+    // delay file opening until first use
     if(tmpfile == NULL){
       tmpfile = fopen(TMP_FILE, "w+");
       if (tmpfile == NULL) {
@@ -262,9 +267,12 @@ int main(int argc, char **argv) {
     syslog(LOG_INFO, "Caught signal, exiting");
   }
 
+#if USE_AESD_CHAR_DEVICE
+#else
   // stop the timestamping thread's sleep
   pthread_mutex_unlock(&endTimestamping);
   pthread_join(timestampThread, NULL);
+#endif
 
   // Variables that are stack-allocated will have a 'destructor' called
   // automatically

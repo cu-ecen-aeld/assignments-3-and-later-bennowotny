@@ -196,10 +196,6 @@ static void *record_timestamp(void *param) {
   pthread_mutex_t *endTimestamping = parsedParams->endTimestamping;
   free(param);
 
-#if USE_AESD_CHAR_DEVICE
-  return NULL;
-#endif
-
   while (true) {
     struct timespec currTime;
     clock_gettime(CLOCK_REALTIME, &currTime);

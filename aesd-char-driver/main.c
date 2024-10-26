@@ -40,6 +40,7 @@ int aesd_open(struct inode *inode, struct file *filp)
     /**
      * TODO: handle open
      */
+    // setup the file data to use the device pointer
     devicePtr = container_of(inode->i_cdev, struct aesd_dev, cdev);
     filp->private_data = devicePtr;
     return 0;
@@ -51,6 +52,7 @@ int aesd_release(struct inode *inode, struct file *filp)
     /**
      * TODO: handle release
      */
+    // there is only 1 global device, no deallocation needs to be done per. file
     return 0;
 }
 
@@ -66,35 +68,42 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
      * TODO: handle read
      */
 
+    // extract device from the file pointer
     device = (struct aesd_dev*) (filp->private_data);
 
+    // exit early if invalid memory is used
     if(!access_ok(buf, count)){
         retval = -EINVAL;
         goto exit;
     }
 
+    // reading from buffer - lock buffer mutex
     if(mutex_lock_interruptible(&device->buffer_mutex) != 0){
         retval = -EINTR;
         goto exit;
     }
 
+    // read the datablock from the buffer
     datablk = aesd_circular_buffer_find_entry_offset_for_fpos(&device->buffer, *f_pos, &strOffset);
     PDEBUG("blk is %p", datablk);
     if(datablk == NULL){
+        // not enough data in the buffer for this read
         retval = 0;
         goto unlock_bufferMtx;
     }
 
+    // calculate the size of the read based off the count and the data available
     retval = (datablk->size - strOffset) > count ? count : (datablk->size - strOffset);
     *f_pos += retval;
     PDEBUG("reading out %zu bytes", retval);
 
+    // give the data to the user
     if(copy_to_user(buf, datablk->buffptr + strOffset, retval) != 0){
         retval = -EINVAL;
         goto unlock_bufferMtx;
     }
 
-    goto unlock_bufferMtx;
+    goto unlock_bufferMtx; // noop, signaling intent
 
 unlock_bufferMtx:
     mutex_unlock(&device->buffer_mutex);
@@ -102,6 +111,8 @@ exit:
     return retval;
 }
 
+// helper function, like strstr but without 0-termination assumptions
+// based off of memmem(3)
 static void* memmem(const void* haystack, size_t haystackSize, const void* needle, size_t needleSize){
     const char* haystackData = haystack;
     const char* needleData = needle;
@@ -134,13 +145,16 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
 
+    // extrace the device from the file data
     device = (struct aesd_dev*) (filp->private_data);
     
+    // exit early if given a bad pointer
     if(!access_ok(buf, count)){
         retval = -EINVAL;
         goto exit;
     }
 
+    // take ownership of the given data
     strBuf = kmalloc(count, GFP_KERNEL);
     if(strBuf == NULL){
         retval = -ENOMEM;
@@ -152,15 +166,16 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         goto cleanup_tmpbuffer;
     }
 
+    // mutate the 'nextLine' - lock the mutex
     if(mutex_lock_interruptible(&device->nextLine_mutex) != 0){
         retval = -EINTR;
         goto cleanup_tmpbuffer;
     }
 
+    // look for a newline in the input data, adjust the size if a newline is found
     eolPtr = memmem(strBuf, count, "\n", 1);
     count = eolPtr == NULL ? count : eolPtr - strBuf + 1;
     if(eolPtr == NULL && device->nextLine == NULL){
-        PDEBUG("op 1");
         // We don't have a newline or an existing line
         // start a new one
         device->nextLine = strBuf;
@@ -170,7 +185,6 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         *f_pos += count;
         goto unlock_nxtLineMutex;
     }else if(eolPtr == NULL && device->nextLine != NULL){
-        PDEBUG("op 2");
         // We don't have a newline, but we already had a line going
         // append
         reallocPtr = krealloc(device->nextLine, device->nextLineLength + count, GFP_KERNEL);
@@ -185,7 +199,6 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         retval = count;
         *f_pos += count;
     }else if(eolPtr != NULL && device->nextLine == NULL){
-        PDEBUG("op 3");
         // We have a newline and no previous data pending
         // skip the nextLine buffer, write straight to the buffer
         if(mutex_lock_interruptible(&device->buffer_mutex) != 0){
@@ -204,7 +217,6 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         *f_pos += count;
         goto unlock_nxtLineMutex;
     }else{
-        PDEBUG("op 4");
         // We have a newline and previous data
         // append the string and then steal the appended string
         reallocPtr = krealloc(device->nextLine, device->nextLineLength + count, GFP_KERNEL);
@@ -234,7 +246,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         *f_pos += count;
     }
 
-    goto cleanup_tmpbuffer; // no-op, signifying intention
+    goto cleanup_tmpbuffer; // noop, signifying intention
 
 cleanup_tmpbuffer:
     kfree(strBuf);
@@ -246,16 +258,42 @@ exit:
 
 loff_t aesd_llseek (struct file *fp, loff_t offset, int whence){
     int retval = -EINVAL;
-    
+    struct aesd_buffer_entry* entryptr = NULL;
+    struct aesd_dev* device = NULL;
+    int i;
+    loff_t fileSize = 0;
     PDEBUG("seeking to %lld with whence %d", offset, whence);
 
-    // writes to the end go to offset 0
-    if(whence == SEEK_END)
-        retval = 0;
-    // offsets from the beginning of the file go to their requested offset
-    else if(whence == SEEK_SET)
-        retval = offset;
+    // grab the device from the file information
+    device = (struct aesd_dev*)(fp->private_data);
 
+    if(whence == SEEK_END || whence == SEEK_SET || whence == SEEK_CUR){
+        switch(whence){
+        case SEEK_END:
+            // writes to the end go to end-relative offset
+            AESD_CIRCULAR_BUFFER_FOREACH(entryptr, &device->buffer, i){
+                fileSize += entryptr->size;
+            }
+            retval = fileSize + offset;
+            break;
+        case SEEK_SET:
+            // offsets from the beginning of the file go to their requested offset
+            retval = offset;
+            break;
+        case SEEK_CUR:
+            // current offsets are wrt the current position
+            retval = fp->f_pos + offset;
+            break;
+        default:
+            break;
+        }
+
+        // bound the return value to be within file bounds
+        retval = retval > fileSize ? fileSize : retval;
+        retval = retval < 0 ? 0 : retval;
+    }
+
+    // update the file pointer so it remembers its new offset (if there's not an error)
     if(retval >= 0)
         fp->f_pos = retval;
     return retval;

@@ -268,12 +268,12 @@ loff_t aesd_llseek (struct file *fp, loff_t offset, int whence){
     device = (struct aesd_dev*)(fp->private_data);
 
     if(whence == SEEK_END || whence == SEEK_SET || whence == SEEK_CUR){
+        AESD_CIRCULAR_BUFFER_FOREACH(entryptr, &device->buffer, i){
+            fileSize += entryptr->size;
+        }
         switch(whence){
         case SEEK_END:
             // writes to the end go to end-relative offset
-            AESD_CIRCULAR_BUFFER_FOREACH(entryptr, &device->buffer, i){
-                fileSize += entryptr->size;
-            }
             retval = fileSize + offset;
             break;
         case SEEK_SET:

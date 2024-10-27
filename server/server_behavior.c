@@ -1,4 +1,5 @@
 #include "server_behavior.h"
+#include "aesd_ioctl.h"
 #include "cleanup.h"
 #include <bits/pthreadtypes.h>
 #include <bits/time.h>
@@ -13,6 +14,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/syslog.h>
+#include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -36,11 +38,38 @@ typedef struct {
 #define THREAD_RETURN_FAILURE _THREAD_RETURN(EXIT_FAILURE)
 #define THREAD_RETURN_SUCCESS _THREAD_RETURN(EXIT_SUCCESS)
 
+#define IOCTL_CMD_STRING ("AESDCHAR_IOCSEEKTO:")
+static const char* ioctl_cmd_string = IOCTL_CMD_STRING;
+
 void cleanup_client_addr(char **addr) {
   syslog(LOG_INFO, "Closed connection from %s", *addr);
 }
 
 void cleanup_completion_flag(atomic_flag **flag) { atomic_flag_clear(*flag); }
+
+// helper function, like strstr but without 0-termination assumptions
+// based off of memmem(3)
+static void* memmem(const void* haystack, size_t haystackSize, const void* needle, size_t needleSize){
+    const char* haystackData = haystack;
+    const char* needleData = needle;
+    size_t index = 0;
+    size_t matchSize = 0;
+
+    if(needleSize > haystackSize)
+      return NULL;
+
+    while(index < (haystackSize - needleSize + 1)){
+        while(matchSize < needleSize && (*(haystackData + index + matchSize) == *(needleData + matchSize))){
+            ++matchSize;
+        }
+        if(matchSize == needleSize){
+            return (void*)(haystackData + index);
+        }
+        matchSize = 0;
+        ++index;
+    }
+    return NULL;
+}
 
 /**
  * @brief Write to the end of a file, guarded by a mutex
@@ -69,6 +98,75 @@ static int write_safe_to_file_end(char *data, size_t dataSize, FILE *file,
   fsync(tmpFileFd);
   pthread_mutex_unlock(write_guard);
   return EXIT_SUCCESS;
+}
+
+static int ioctl_handling(const char* data, size_t dataSize, FILE* tmpFile, pthread_mutex_t* tmpFileMutex, int connectionFd){
+  const char* xStartPtr = data + sizeof(IOCTL_CMD_STRING);
+  size_t xStrLen = 0;
+  const char* yStartPtr = NULL;
+  size_t yStrLen = 0;
+  const char* currDataPtr = xStartPtr;
+
+  while(true){
+    if((currDataPtr - data) >= dataSize)
+      break;
+    if((*currDataPtr < '0' || *currDataPtr > '9') && *currDataPtr != ',')
+      return 1;
+
+    if(*currDataPtr == ','){
+      yStartPtr = currDataPtr + 1;
+    }else{
+      if(yStartPtr == NULL)
+        ++xStrLen;
+      else
+        ++yStrLen;
+    }
+    ++currDataPtr;
+  }
+
+  if(yStartPtr == NULL){
+    // could not parse the second value
+    return 1;
+  }
+  
+  // printf("'%s' %d '%s' %d", xStartPtr, xStrLen, yStartPtr, yStrLen);
+  char xStr[100] = {0};
+  char yStr[100] = {0};
+  memcpy(xStr, xStartPtr, xStrLen);
+  memcpy(yStr, yStartPtr, yStrLen);
+
+  const uint32_t X = strtoul(xStr, NULL, 10);
+  const uint32_t Y = strtoul(yStr, NULL, 10);
+
+  struct aesd_seekto cmd={
+    .write_cmd = X,
+    .write_cmd_offset = Y
+  };
+  ioctl(fileno(tmpFile), AESDCHAR_IOCSEEKTO, (long)(&cmd));
+
+  // guard use of the file
+  pthread_mutex_lock(tmpFileMutex);
+  // write file to socket
+  char *fileBuf CLEANUP(cleanup_databuffer) = malloc(BUFFER_SIZE_INCREMENT);
+  if (fileBuf == NULL) {
+    syslog(LOG_ERR, "Could not malloc initial buffer resource");
+    pthread_mutex_unlock(tmpFileMutex);
+    return 1;
+  }
+  size_t bytesRead = 0;
+  while ((bytesRead = fread(fileBuf, sizeof(char), BUFFER_SIZE_INCREMENT,
+                            tmpFile)) != 0) {
+    // More data to read
+    if (send(connectionFd, fileBuf, bytesRead, 0) != bytesRead) {
+      syslog(LOG_ERR, "Could not send data to client");
+      pthread_mutex_unlock(tmpFileMutex);
+      return 1;
+    }
+  }
+
+  pthread_mutex_unlock(tmpFileMutex);
+
+  return 0;
 }
 
 static void *server_work_thread(void *param) {
@@ -131,6 +229,16 @@ static void *server_work_thread(void *param) {
         // We found the packet end!  Progress to the next step
         dataBufferSize = endOfPacket - dataBuf + 1; // Incl. newline
         packetComplete = true;
+      }
+    }
+
+    if(memmem(dataBuf, dataBufferSize, ioctl_cmd_string, sizeof(IOCTL_CMD_STRING) - 1) == dataBuf){ // drop null-termination
+      if(ioctl_handling(dataBuf, dataBufferSize-1, tmpFile, tmpFileMutex, connectionFd) == 0) {// drop the newline
+        printf("Tried parsing, it worked!\n");
+        THREAD_RETURN_SUCCESS;
+      }else{
+        printf("Tried parsing, didn't work\n");
+        THREAD_RETURN_FAILURE;
       }
     }
 

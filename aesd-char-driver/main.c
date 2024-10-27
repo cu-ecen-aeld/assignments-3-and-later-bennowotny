@@ -336,6 +336,8 @@ long aesd_ioctl (struct file *fp, unsigned int opcode, unsigned long param){
         return -EINVAL;
     }
 
+    PDEBUG("parsed ioctl data: cmd %d offset %d", command_data.write_cmd, command_data.write_cmd_offset);
+
     if(mutex_lock_interruptible(&device->buffer_mutex) != 0){
         return -EINTR;
     }

@@ -22,6 +22,7 @@
 #include <linux/uaccess.h>
 
 #include "aesd-circular-buffer.h"
+#include "aesd_ioctl.h"
 #include "aesdchar.h"
 #include "asm/string.h"
 #include "asm/uaccess.h"
@@ -312,14 +313,64 @@ int aesd_fsync(struct file *fp, loff_t unused1, loff_t unused2, int datasync){
     return 0;
 }
 
+long aesd_ioctl (struct file *fp, unsigned int opcode, unsigned long param){
+    struct aesd_seekto command_data;
+    loff_t offset = 0;
+    size_t buffer_offset = 0;
+    struct aesd_buffer_entry* entryptr;
+    int i;
+    struct aesd_dev* device;
+    PDEBUG("ioctl called with code %d", opcode);
+
+    device = (struct aesd_dev*)(fp->private_data);
+
+    if(!access_ok((void*) param, sizeof(struct aesd_seekto))){
+        return -EINVAL;
+    }
+
+    if(opcode != AESDCHAR_IOCSEEKTO){
+        return -EINVAL;
+    }
+
+    if(copy_from_user(&command_data, (void*)param, sizeof(struct aesd_seekto)) != 0){
+        return -EINVAL;
+    }
+
+    if(mutex_lock_interruptible(&device->buffer_mutex) != 0){
+        return -EINTR;
+    }
+    mutex_unlock(&device->buffer_mutex);
+
+    AESD_CIRCULAR_BUFFER_FOREACH(entryptr, &device->buffer, i){
+        if(buffer_offset == command_data.write_cmd) goto post_loop;
+        offset += entryptr->size;
+        ++buffer_offset;
+    }
+    // searched the whole loop without finding the entry: not enough entries
+    return -EINVAL;
+
+post_loop:
+    if(entryptr->size < command_data.write_cmd_offset){
+        // not enough bytes in requested command
+        return -EINVAL;
+    }
+
+    offset += command_data.write_cmd_offset;
+
+    fp->f_pos = offset;
+
+    return 0;
+}
+
 struct file_operations aesd_fops = {
-    .owner =    THIS_MODULE,
-    .read =     aesd_read,
-    .write =    aesd_write,
-    .open =     aesd_open,
-    .release =  aesd_release,
-    .llseek =   aesd_llseek,
-    .fsync =    aesd_fsync
+    .owner =            THIS_MODULE,
+    .read =             aesd_read,
+    .write =            aesd_write,
+    .open =             aesd_open,
+    .release =          aesd_release,
+    .llseek =           aesd_llseek,
+    .fsync =            aesd_fsync,
+    .unlocked_ioctl =   aesd_ioctl
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)

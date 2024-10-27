@@ -267,10 +267,17 @@ loff_t aesd_llseek (struct file *fp, loff_t offset, int whence){
     // grab the device from the file information
     device = (struct aesd_dev*)(fp->private_data);
 
+    if(mutex_lock_interruptible(&device->buffer_mutex) != 0){
+        return -EINTR;
+    }
+
+    AESD_CIRCULAR_BUFFER_FOREACH(entryptr, &device->buffer, i){
+        fileSize += entryptr->size;
+    }
+
+    mutex_unlock(&device->buffer_mutex);
+
     if(whence == SEEK_END || whence == SEEK_SET || whence == SEEK_CUR){
-        AESD_CIRCULAR_BUFFER_FOREACH(entryptr, &device->buffer, i){
-            fileSize += entryptr->size;
-        }
         switch(whence){
         case SEEK_END:
             // writes to the end go to end-relative offset

@@ -1,5 +1,7 @@
 CC ?= gcc
+USE_AESD_CHAR_DEVICE ?= 1
 CFLAGS ?= -Wall -Werror -g
+CFLAGS += -DUSE_AESD_CHAR_DEVICE=$(USE_AESD_CHAR_DEVICE)
 
 all: aesdsocket
 

@@ -14,6 +14,7 @@
 #include <sys/socket.h>
 #include <sys/syslog.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <syslog.h>
 #include <unistd.h>
 
@@ -22,7 +23,14 @@
 
 const char *SERVER_PORT = "9000";
 const int LISTEN_BACKLOG = 20; // Listen for more connections simultaneously
-const char *TMP_FILE = "/var/tmp/aesdsocket";
+// Use the device file if requested
+const char *TMP_FILE = 
+#if USE_AESD_CHAR_DEVICE
+"/dev/aesdchar"
+#else
+"/var/tmp/aesdsocket"
+#endif
+;
 
 /**
  * @brief Cleanup utilities only needed by the server management
@@ -31,7 +39,10 @@ const char *TMP_FILE = "/var/tmp/aesdsocket";
 void cleanup_addrinfo(struct addrinfo **info) { freeaddrinfo(*info); }
 
 void cleanup_tmpfile(FILE **fp) {
+  #if USE_AESD_CHAR_DEVICE
+  #else
   unlink(TMP_FILE);
+  #endif
   fclose(*fp);
 }
 
@@ -133,22 +144,31 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
+#if USE_AESD_CHAR_DEVICE
+  // Don't open the file yet, wait until the server is referenced
+  FILE* tmpfile CLEANUP(cleanup_tmpfile) = NULL;
+#else
   // Open/clear the storage file
   FILE *tmpfile CLEANUP(cleanup_tmpfile) = fopen(TMP_FILE, "w+");
   if (tmpfile == NULL) {
     syslog(LOG_ERR, "Error when waiting for a connection");
     return EXIT_FAILURE;
   }
+#endif
 
+#if USE_AESD_CHAR_DEVICE
+  pthread_mutex_t tmp=PTHREAD_MUTEX_INITIALIZER; // avoid build warning for uninitialized variable
+#else
   // setup server multithreading
+  pthread_mutex_t tmp; // No cleanup, temporary copy of the mutex
   pthread_t timestampThread;
   pthread_mutex_t endTimestamping;
-  pthread_mutex_t tmp; // No cleanup, temporary copy of the mutex
   if (on_server_initialize(&tmp, &timestampThread, tmpfile, &endTimestamping) !=
       EXIT_SUCCESS) {
     syslog(LOG_ERR, "Could not initialize the server");
     return EXIT_FAILURE;
   }
+#endif
   pthread_mutex_t tmpFileMutex CLEANUP(cleanup_mutex) =
       tmp; // Longterm mutex storage, requires cleanup
 
@@ -194,6 +214,18 @@ int main(int argc, char **argv) {
       return EXIT_FAILURE;
     }
 
+#if USE_AESD_CHAR_DEVICE
+    // delay file opening until first use
+    if(tmpfile == NULL){
+      tmpfile = fopen(TMP_FILE, "w+");
+      if (tmpfile == NULL) {
+        syslog(LOG_ERR, "Error when waiting for a connection");
+        return EXIT_FAILURE;
+      }
+      setbuf(tmpfile, NULL);
+    }
+#endif
+
     // Run the server behavior (read a line, write the file)
     if (on_server_connection(connectionSocketFd, tmpfile, &tmpFileMutex,
                              addrString, &(threadTrackingData->worker_thread),
@@ -235,9 +267,12 @@ int main(int argc, char **argv) {
     syslog(LOG_INFO, "Caught signal, exiting");
   }
 
+#if USE_AESD_CHAR_DEVICE
+#else
   // stop the timestamping thread's sleep
   pthread_mutex_unlock(&endTimestamping);
   pthread_join(timestampThread, NULL);
+#endif
 
   // Variables that are stack-allocated will have a 'destructor' called
   // automatically

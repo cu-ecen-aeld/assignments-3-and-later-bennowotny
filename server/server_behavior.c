@@ -64,6 +64,7 @@ static int write_safe_to_file_end(char *data, size_t dataSize, FILE *file,
   }
   // flush data to disc, avoid relying on OS synchronization for the FS
   fflush(file);
+  
   const int tmpFileFd = fileno(file);
   fsync(tmpFileFd);
   pthread_mutex_unlock(write_guard);

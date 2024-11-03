@@ -104,7 +104,7 @@ static void* memmem(const void* haystack, size_t haystackSize, const void* needl
 }
 
 static int ioctl_handling(const char* data, size_t dataSize, FILE* tmpFile, pthread_mutex_t* tmpFileMutex, int connectionFd){
-  const char* xStartPtr = data + sizeof(IOCTL_CMD_STRING);
+  const char* xStartPtr = data + sizeof(IOCTL_CMD_STRING) - 1; // drop null-termination
   size_t xStrLen = 0;
   const char* yStartPtr = NULL;
   size_t yStrLen = 0;

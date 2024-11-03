@@ -38,38 +38,16 @@ typedef struct {
 #define THREAD_RETURN_FAILURE _THREAD_RETURN(EXIT_FAILURE)
 #define THREAD_RETURN_SUCCESS _THREAD_RETURN(EXIT_SUCCESS)
 
+#if USE_AESD_CHAR_DEVICE
 #define IOCTL_CMD_STRING ("AESDCHAR_IOCSEEKTO:")
 static const char* ioctl_cmd_string = IOCTL_CMD_STRING;
+#endif
 
 void cleanup_client_addr(char **addr) {
   syslog(LOG_INFO, "Closed connection from %s", *addr);
 }
 
 void cleanup_completion_flag(atomic_flag **flag) { atomic_flag_clear(*flag); }
-
-// helper function, like strstr but without 0-termination assumptions
-// based off of memmem(3)
-static void* memmem(const void* haystack, size_t haystackSize, const void* needle, size_t needleSize){
-    const char* haystackData = haystack;
-    const char* needleData = needle;
-    size_t index = 0;
-    size_t matchSize = 0;
-
-    if(needleSize > haystackSize)
-      return NULL;
-
-    while(index < (haystackSize - needleSize + 1)){
-        while(matchSize < needleSize && (*(haystackData + index + matchSize) == *(needleData + matchSize))){
-            ++matchSize;
-        }
-        if(matchSize == needleSize){
-            return (void*)(haystackData + index);
-        }
-        matchSize = 0;
-        ++index;
-    }
-    return NULL;
-}
 
 /**
  * @brief Write to the end of a file, guarded by a mutex
@@ -98,6 +76,31 @@ static int write_safe_to_file_end(char *data, size_t dataSize, FILE *file,
   fsync(tmpFileFd);
   pthread_mutex_unlock(write_guard);
   return EXIT_SUCCESS;
+}
+
+#if USE_AESD_CHAR_DEVICE
+// helper function, like strstr but without 0-termination assumptions
+// based off of memmem(3)
+static void* memmem(const void* haystack, size_t haystackSize, const void* needle, size_t needleSize){
+    const char* haystackData = haystack;
+    const char* needleData = needle;
+    size_t index = 0;
+    size_t matchSize = 0;
+
+    if(needleSize > haystackSize)
+      return NULL;
+
+    while(index < (haystackSize - needleSize + 1)){
+        while(matchSize < needleSize && (*(haystackData + index + matchSize) == *(needleData + matchSize))){
+            ++matchSize;
+        }
+        if(matchSize == needleSize){
+            return (void*)(haystackData + index);
+        }
+        matchSize = 0;
+        ++index;
+    }
+    return NULL;
 }
 
 static int ioctl_handling(const char* data, size_t dataSize, FILE* tmpFile, pthread_mutex_t* tmpFileMutex, int connectionFd){
@@ -129,20 +132,32 @@ static int ioctl_handling(const char* data, size_t dataSize, FILE* tmpFile, pthr
     return 1;
   }
   
-  // printf("'%s' %d '%s' %d", xStartPtr, xStrLen, yStartPtr, yStrLen);
+  // databuffers to hold each number
   char xStr[100] = {0};
   char yStr[100] = {0};
   memcpy(xStr, xStartPtr, xStrLen);
   memcpy(yStr, yStartPtr, yStrLen);
 
+  errno = 0;
   const uint32_t X = strtoul(xStr, NULL, 10);
+  if(errno != 0){
+    syslog(LOG_ERR, "Could not parse the X value");
+    return 1;
+  }
+  errno = 0;
   const uint32_t Y = strtoul(yStr, NULL, 10);
+  if(errno != 0){
+    syslog(LOG_ERR, "Could not parse the Y value");
+    return 1;
+  }
 
   struct aesd_seekto cmd={
     .write_cmd = X,
     .write_cmd_offset = Y
   };
-  ioctl(fileno(tmpFile), AESDCHAR_IOCSEEKTO, (long)(&cmd));
+  if(ioctl(fileno(tmpFile), AESDCHAR_IOCSEEKTO, (long)(&cmd)) != 0){
+    syslog(LOG_WARNING, "IOCTL to aesdchar device failed, returning undefined file contents");
+  }
 
   // guard use of the file
   pthread_mutex_lock(tmpFileMutex);
@@ -168,6 +183,7 @@ static int ioctl_handling(const char* data, size_t dataSize, FILE* tmpFile, pthr
 
   return 0;
 }
+#endif
 
 static void *server_work_thread(void *param) {
   // Parse the thread params
@@ -232,15 +248,15 @@ static void *server_work_thread(void *param) {
       }
     }
 
+#if USE_AESD_CHAR_DEVICE
     if(memmem(dataBuf, dataBufferSize, ioctl_cmd_string, sizeof(IOCTL_CMD_STRING) - 1) == dataBuf){ // drop null-termination
       if(ioctl_handling(dataBuf, dataBufferSize-1, tmpFile, tmpFileMutex, connectionFd) == 0) {// drop the newline
-        printf("Tried parsing, it worked!\n");
         THREAD_RETURN_SUCCESS;
       }else{
-        printf("Tried parsing, didn't work\n");
         THREAD_RETURN_FAILURE;
       }
     }
+#endif
 
     if (write_safe_to_file_end(dataBuf, dataBufferSize, tmpFile,
                                tmpFileMutex) != EXIT_SUCCESS) {

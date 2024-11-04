@@ -341,13 +341,15 @@ long aesd_ioctl (struct file *fp, unsigned int opcode, unsigned long param){
     if(mutex_lock_interruptible(&device->buffer_mutex) != 0){
         return -EINTR;
     }
-    mutex_unlock(&device->buffer_mutex);
 
     AESD_CIRCULAR_BUFFER_FOREACH(entryptr, &device->buffer, i){
         if(buffer_offset == command_data.write_cmd) goto post_loop;
         offset += entryptr->size;
         ++buffer_offset;
     }
+
+    mutex_unlock(&device->buffer_mutex);
+    
     // searched the whole loop without finding the entry: not enough entries
     return -EINVAL;
 

@@ -320,6 +320,7 @@ long aesd_ioctl (struct file *fp, unsigned int opcode, unsigned long param){
     struct aesd_buffer_entry* entryptr;
     int i;
     struct aesd_dev* device;
+    bool found_entry = false;
     PDEBUG("ioctl called with code %d", opcode);
 
     device = (struct aesd_dev*)(fp->private_data);
@@ -343,17 +344,21 @@ long aesd_ioctl (struct file *fp, unsigned int opcode, unsigned long param){
     }
 
     AESD_CIRCULAR_BUFFER_FOREACH(entryptr, &device->buffer, i){
-        if(buffer_offset == command_data.write_cmd) goto post_loop;
+        if(buffer_offset == command_data.write_cmd){
+            found_entry = true;
+            break;
+        }
         offset += entryptr->size;
         ++buffer_offset;
     }
 
     mutex_unlock(&device->buffer_mutex);
     
-    // searched the whole loop without finding the entry: not enough entries
-    return -EINVAL;
+    if(!found_entry){
+        // searched the whole loop without finding the entry: not enough entries
+        return -EINVAL;
+    }
 
-post_loop:
     if(entryptr->size < command_data.write_cmd_offset){
         // not enough bytes in requested command
         return -EINVAL;

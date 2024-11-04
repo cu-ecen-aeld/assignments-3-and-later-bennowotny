@@ -1,5 +1,7 @@
 #include "server_behavior.h"
+#if USE_AESD_CHAR_DEVICE
 #include "aesd_ioctl.h"
+#endif
 #include "cleanup.h"
 #include <bits/pthreadtypes.h>
 #include <bits/time.h>
